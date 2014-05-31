@@ -1,0 +1,5 @@
+#!/bin/bash
+MOUNT_DIRECTORY=$1
+/usr/bin/find $MOUNT_DIRECTORY -type d | /usr/bin/xargs /usr/bin/chsmack -a 'system::ext_storage' -e ''
+/usr/bin/find $MOUNT_DIRECTORY -type f | /usr/bin/xargs /usr/bin/chsmack -a 'system::ext_storage'
+/usr/bin/find $MOUNT_DIRECTORY | /usr/bin/xargs /bin/chown app:app

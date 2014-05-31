@@ -1,0 +1,11 @@
+<manifest>
+	<define>
+		<domain name="liblogd-db"/>
+	</define>
+	<request>
+		<domain name="liblogd-db"/>
+	</request>
+	<assign>
+		<filesystem path="/usr/lib/liblogd-db.so" label="_" exec_label="none"/>
+	</assign>
+</manifest>

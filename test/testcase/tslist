@@ -1,0 +1,10 @@
+/testcase/utc_system_deviced_battery
+/testcase/utc_system_deviced_control
+/testcase/utc_system_deviced_deviced
+/testcase/utc_system_deviced_deviced_managed
+/testcase/utc_system_deviced_display
+/testcase/utc_system_deviced_haptic
+/testcase/utc_system_deviced_led
+/testcase/utc_system_deviced_mmc
+/testcase/utc_system_deviced_storage
+

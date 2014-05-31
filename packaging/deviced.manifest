@@ -1,0 +1,40 @@
+<manifest>
+    <define>
+        <domain name="deviced"/>
+        <provide>
+            <label name="deviced::display" />
+            <label name="deviced::power" />
+        </provide>
+    </define>
+    <assign>
+        <filesystem path="/etc/init.d/device-daemon" label="_" exec_label="none" />
+        <filesystem path="/etc/rc.d/init.d/device-daemon" label="_" exec_label="none" />
+        <filesystem path="/opt/etc/dump.d/module.d/dump_pm.sh" label="_" exec_label="none" />
+        <dbus name="org.tizen.system.deviced" own="deviced" bus="system">
+            <node name="/Org/Tizen/System/DeviceD/Display">
+                <interface name="org.tizen.system.deviced.display">
+                    <!-- dbus smack label "deviced::display" -->
+                    <method name="lockstate">
+                        <annotation name="com.tizen.smack" value="deviced::display" />
+                    </method>
+                    <method name="changestate">
+                        <annotation name="com.tizen.smack" value="deviced::display" />
+                    </method>
+                    <method name="HoldBrightness">
+                        <annotation name="com.tizen.smack" value="deviced::display" />
+                    </method>
+                </interface>
+            </node>
+            <node name="/Org/Tizen/System/DeviceD/Power">
+                <interface name="org.tizen.system.deviced.power">
+                    <method name="setresetkeydisable">
+                        <annotation name="com.tizen.smack" value="deviced::power" />
+                    </method>
+                </interface>
+            </node>
+        </dbus>
+    </assign>
+    <request>
+        <domain name="deviced"/>
+    </request>
+</manifest>
