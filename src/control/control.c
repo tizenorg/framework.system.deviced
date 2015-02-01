@@ -48,7 +48,7 @@ static int control_handler(int argc, char **argv)
 	int device;
 	bool enable;
 	int ret;
-	const struct device_ops *dev_ops;
+	const struct device_ops *dev_ops = NULL;
 
 	_I("argc : %d", argc);
 	for (i = 0; i < argc; ++i)
@@ -71,11 +71,7 @@ static int control_handler(int argc, char **argv)
 
 	if (i >= ARRAY_SIZE(devices))
 		return -EINVAL;
-
-	dev_ops = find_device(devices[i].name);
-	if (!dev_ops)
-		return -ENODEV;
-
+	FIND_DEVICE_INT(dev_ops, devices[i].name);
 	if (enable)
 		ret = device_start(dev_ops);
 	else
@@ -91,7 +87,7 @@ static int get_control_handler(int argc, char **argv)
 	int device;
 	bool enable;
 	int ret;
-	const struct device_ops *dev_ops;
+	const struct device_ops *dev_ops = NULL;
 
 	_I("argc : %d", argc);
 	for (i = 0; i < argc; ++i)
@@ -114,9 +110,7 @@ static int get_control_handler(int argc, char **argv)
 	if (i >= ARRAY_SIZE(devices))
 		return -EINVAL;
 
-	dev_ops = find_device(devices[i].name);
-	if (!dev_ops)
-		return -ENODEV;
+	FIND_DEVICE_INT(dev_ops, devices[i].name);
 
 	return device_get_status(dev_ops);
 }
@@ -225,8 +219,6 @@ static void control_init(void *data)
 	ret = register_edbus_method(DEVICED_PATH_SYSNOTI, edbus_methods, ARRAY_SIZE(edbus_methods));
 	if (ret < 0)
 		_E("fail to init edbus method(%d)", ret);
-
-	register_action(CONTROL_HANDLER_NAME, control_handler, NULL, NULL);
 }
 
 static const struct device_ops control_device_ops = {

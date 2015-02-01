@@ -17,10 +17,25 @@
  */
 
 #include <vconf.h>
+#include <limits.h>
 #include "usb-client.h"
 #include "core/edbus-handler.h"
 
 #define CHANGE_USB_MODE "ChangeUsbMode"
+
+#define METHOD_GET_STATE      "GetState"
+#define METHOD_GET_MODE       "GetMode"
+#define SIGNAL_STATE_CHANGED  "StateChanged"
+#define SIGNAL_MODE_CHANGED   "ModeChanged"
+
+#define USB_STATE_MAX   UINT_MAX
+#define USB_MODE_MAX    UINT_MAX
+
+enum usbclient_state {
+	USBCLIENT_STATE_DISCONNECTED = 0x00,
+	USBCLIENT_STATE_CONNECTED    = 0x01,
+	USBCLIENT_STATE_AVAILABLE    = 0x02,
+};
 
 static void change_usb_client_mode(void *data, DBusMessage *msg)
 {
@@ -43,6 +58,7 @@ static void change_usb_client_mode(void *data, DBusMessage *msg)
 	case SET_USB_DEFAULT:
 	case SET_USB_RNDIS:
 	case SET_USB_RNDIS_DIAG:
+	case SET_USB_DIAG_RMNET:
 		debug = 0;
 		break;
 	case SET_USB_SDB:
@@ -74,3 +90,114 @@ int register_usb_client_change_request(void)
 			CHANGE_USB_MODE, change_usb_client_mode);
 }
 
+static unsigned int get_usb_state(void)
+{
+	unsigned int state = USBCLIENT_STATE_DISCONNECTED;
+
+	if (get_current_usb_physical_state() == 0) {
+		state |= USBCLIENT_STATE_DISCONNECTED;
+		goto out;
+	}
+
+	state |= USBCLIENT_STATE_CONNECTED;
+
+	if (get_current_usb_logical_state() > 0
+			&& get_current_usb_mode() > SET_USB_NONE)
+		state |= USBCLIENT_STATE_AVAILABLE;
+
+out:
+	return state;
+}
+
+static unsigned int get_usb_mode(void)
+{
+	return get_current_usb_gadget_info(get_current_usb_mode());
+}
+
+void send_msg_usb_state_changed(void)
+{
+	char *param[1];
+	char text[16];
+	unsigned int state;
+	static unsigned int prev_state = USB_STATE_MAX;
+
+	state = get_usb_state();
+	if (state == prev_state)
+		return;
+	prev_state = state;
+
+	_I("USB state changed (%u)", state);
+
+	snprintf(text, sizeof(text), "%u", state);
+	param[0] = text;
+
+	if (broadcast_edbus_signal(
+				DEVICED_PATH_USB,
+				DEVICED_INTERFACE_USB,
+				SIGNAL_STATE_CHANGED,
+				"u", param) < 0)
+		_E("Failed to send dbus signal");
+}
+
+void send_msg_usb_mode_changed(void)
+{
+	char *param[1];
+	char text[16];
+	unsigned int mode;
+	static unsigned int prev_mode = USB_MODE_MAX;
+
+	mode = get_usb_mode();
+	if (mode == prev_mode)
+		return;
+	prev_mode = mode;
+
+	snprintf(text, sizeof(text), "%u", mode);
+	param[0] = text;
+
+	_I("USB mode changed (%u)", mode);
+
+	if (broadcast_edbus_signal(
+				DEVICED_PATH_USB,
+				DEVICED_INTERFACE_USB,
+				SIGNAL_MODE_CHANGED,
+				"u", param) < 0)
+		_E("Failed to send dbus signal");
+}
+
+static DBusMessage *get_usb_client_state(E_DBus_Object *obj, DBusMessage *msg)
+{
+	DBusMessageIter iter;
+	DBusMessage *reply;
+	unsigned int state;
+
+	state = get_usb_state();
+
+	reply = dbus_message_new_method_return(msg);
+	dbus_message_iter_init_append(reply, &iter);
+	dbus_message_iter_append_basic(&iter, DBUS_TYPE_UINT32, &state);
+	return reply;
+}
+
+static DBusMessage *get_usb_client_mode(E_DBus_Object *obj, DBusMessage *msg)
+{
+	DBusMessageIter iter;
+	DBusMessage *reply;
+	unsigned int mode;
+
+	mode = get_usb_mode();
+
+	reply = dbus_message_new_method_return(msg);
+	dbus_message_iter_init_append(reply, &iter);
+	dbus_message_iter_append_basic(&iter, DBUS_TYPE_UINT32, &mode);
+	return reply;
+}
+
+static const struct edbus_method edbus_methods[] = {
+	{ METHOD_GET_STATE    ,  NULL, "u" ,  get_usb_client_state },
+	{ METHOD_GET_MODE     ,  NULL, "u" ,  get_usb_client_mode  },
+};
+
+int register_usbclient_dbus_methods(void)
+{
+	return register_edbus_method(DEVICED_PATH_USB, edbus_methods, ARRAY_SIZE(edbus_methods));
+}

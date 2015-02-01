@@ -39,10 +39,13 @@ extern "C" {
  */
 
 /**
- * @par Description:
- *      This API is used to mount mmc.\n
+ * @fn int mmc_secure_mount(const char *mount_point)
+ * @brief This API is used to mount mmc.\n
+ *              [mount fail value] \n
+ *              -1 : operation not permmitted \n
+ *              -22 : Invalid argument \n
  * @param[in] mount_point pointer to the character buffer containing the path
- * @return 0 on success, -1 if failed
+ * @return 0 on success, negative value if failed
  * @par Example
  * @code
  *  ...
@@ -54,10 +57,13 @@ extern "C" {
 int mmc_secure_mount(const char *mount_point);
 
 /**
- * @par Description:
- *      This API is used to unmount mmc.\n
+ * @fn int mmc_secure_unmount(const char *mount_point)
+ * @brief This API is used to unmount mmc.\n
+ *              [unmount fail value] \n
+ *              -1 : operation not permmitted \n
+ *              -22 : Invalid argument \n
  * @param[in] mount_point pointer to the character buffer containing the path
- * @return 0 on success, -1 if failed
+ * @return 0 on success, negative value if failed
  * @par Example
  * @code
  *  ...

@@ -34,7 +34,13 @@ static void __DESTRUCTOR__ module_exit(void)	\
 	remove_haptic(dev);	\
 }
 
+enum haptic_type {
+	HAPTIC_STANDARD,
+	HAPTIC_EXTERNAL,
+};
+
 struct haptic_ops {
+	enum haptic_type type;
 	bool (*is_valid)(void);
 	const struct haptic_plugin_ops *(*load)(void);
 	void (*release)(void);

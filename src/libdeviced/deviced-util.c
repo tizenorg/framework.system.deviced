@@ -85,11 +85,16 @@ API int deviced_get_cmdline_name(pid_t pid, char *cmdline, size_t cmdline_size)
 	char buf[PATH_MAX + 1];
 	char *filename;
 
+	if (cmdline == NULL) {
+		errno = EINVAL;
+		return -EINVAL;
+	}
+
 	snprintf(buf, sizeof(buf), "/proc/%d/cmdline", pid);
 	fd = open(buf, O_RDONLY);
 	if (fd < 0) {
 		errno = ESRCH;
-		return -1;
+		return -ESRCH;
 	}
 
 	ret = read(fd, buf, PATH_MAX);
@@ -104,7 +109,7 @@ API int deviced_get_cmdline_name(pid_t pid, char *cmdline, size_t cmdline_size)
 
 	if (cmdline_size < strlen(filename) + 1) {
 		errno = EOVERFLOW;
-		return -1;
+		return -EOVERFLOW;
 	}
 
 	strncpy(cmdline, filename, cmdline_size - 1);

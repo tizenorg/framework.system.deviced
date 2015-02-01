@@ -53,10 +53,7 @@
 
 #define PREDEF_DUMP_LOG			"dump_log"
 #define PREDEF_DELETE_DUMP		"delete_dump"
-#define PREDEF_FLIGHT_MODE		"flightmode"
-#define PREDEF_LED_CMD			"ledcmd"
-#define PREDEF_LED_BRT			"ledbrt"
-#define PREDEF_LED_MODE		"ledmode"
+#define FLIGHT_MODE		"flightmode"
 
 #define ALARM_BUS_NAME		"com.samsung.alarm.manager"
 #define ALARM_PATH_NAME		"/com/samsung/alarm/manager"
@@ -149,6 +146,45 @@ static int noti_send(struct sysnoti *msg)
 
 	close(client_sockfd);
 	return result;
+}
+
+static int dbus_flightmode_handler(char* type, char *buf)
+{
+	DBusError err;
+	DBusMessage *msg;
+	char *pa[3];
+	int ret, val;
+
+	pa[0] = type;
+	pa[1] = "1";
+	pa[2] = buf;
+
+	msg = dbus_method_sync_with_reply(DEVICED_BUS_NAME,
+			DEVICED_PATH_POWER, DEVICED_INTERFACE_POWER,
+			pa[0], "sis", pa);
+	if (!msg)
+		return -EBADMSG;
+
+	dbus_error_init(&err);
+
+	ret = dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &val, DBUS_TYPE_INVALID);
+	if (!ret) {
+		_E("no message : [%s:%s]", err.name, err.message);
+		val = -EBADMSG;
+	}
+
+	dbus_message_unref(msg);
+	dbus_error_free(&err);
+
+	_D("%s-%s : %d", DEVICED_INTERFACE_POWER, pa[0], val);
+	return val;
+}
+
+API int deviced_change_flightmode(int mode)
+{
+	char buf[255];
+	snprintf(buf, sizeof(buf), "%d", mode);
+	return dbus_flightmode_handler(FLIGHT_MODE, buf);
 }
 
 API int deviced_call_predef_action(const char *type, int num, ...)

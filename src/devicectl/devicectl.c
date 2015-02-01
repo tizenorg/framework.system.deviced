@@ -23,6 +23,7 @@
 #include <dbus/dbus.h>
 #include <shared/dbus.h>
 #include <core/common.h>
+#include "usb.h"
 
 /*
  * devicectl [device] [action]
@@ -35,6 +36,7 @@ enum device_type {
 	DEVICE_DISPLAY,
 	DEVICE_LED,
 	DEVICE_PASS,
+	DEVICE_USB,
 	DEVICE_MAX,
 	DEVICE_ALL,
 };
@@ -50,6 +52,7 @@ static const struct device {
 	{ DEVICE_DISPLAY, "display", DEVICED_PATH_DISPLAY, DEVICED_INTERFACE_DISPLAY },
 	{ DEVICE_LED,     "led",     DEVICED_PATH_LED,     DEVICED_INTERFACE_LED     },
 	{ DEVICE_PASS,    "pass",    DEVICED_PATH_PASS,    DEVICED_INTERFACE_PASS    },
+	{ DEVICE_USB,     "usb",     DEVICED_PATH_USB,     DEVICED_INTERFACE_USB     },
 };
 
 static int start_device(char **args)
@@ -144,27 +147,63 @@ static int save_log(char **args)
 	return 0;
 }
 
+static int set_usb_mode(char **args)
+{
+	return load_usb_mode(args[3]);
+}
+
+static int unset_usb_mode(char **args)
+{
+	return unload_usb_mode(args[3]);
+}
+
 static const struct action {
 	const enum device_type id;
 	const char *action;
 	const int argc;
 	int (* const func)(char **args);
+	const char *option;
 } actions[] = {
-	{ DEVICE_ALL,       "start",           3, start_device          },
-	{ DEVICE_ALL,       "stop",            3, stop_device           },
-	{ DEVICE_DISPLAY,   "dumpmode",        4, dump_mode             },
-	{ DEVICE_LED,       "dumpmode",        4, dump_mode             },
-	{ DEVICE_DISPLAY,   "savelog",         3, save_log              },
+	{ DEVICE_ALL,       "start",           3, start_device,      ""            },
+	{ DEVICE_ALL,       "stop",            3, stop_device,       ""            },
+	{ DEVICE_DISPLAY,   "dumpmode",        4, dump_mode,         "[on|off]"    },
+	{ DEVICE_LED,       "dumpmode",        4, dump_mode,         "[on|off]"    },
+	{ DEVICE_DISPLAY,   "savelog",         3, save_log,          ""            },
+	{ DEVICE_USB,       "set",             4, set_usb_mode,      "[sdb|ssh]"   },
+	{ DEVICE_USB,       "unset",           4, unset_usb_mode,    "[sdb|ssh]"   },
 };
 
 static inline void usage()
 {
 	printf("[usage] devicectl <device_name> <action>\n");
+	printf("Please use option --help to check options\n");
+}
+
+static void help()
+{
+	int i;
+
+	printf("[usage] devicectl <device_name> <action> <option>\n");
+	printf("device name & action & option\n");
+	for (i = 0; i < ARRAY_SIZE(actions); i++) {
+		if (actions[i].id == DEVICE_ALL) {
+			printf("    [all-device] %s %s\n", actions[i].action,
+			    actions[i].option);
+		} else {
+			printf("    %s %s %s\n", devices[actions[i].id].name,
+			    actions[i].action, actions[i].option);
+		}
+	}
 }
 
 int main(int argc, char *argv[])
 {
 	int i;
+
+	if (argc == 2 && !strcmp(argv[1], "--help")) {
+		help();
+		return 0;
+	}
 
 	if (argc < 3) {
 		usage();

@@ -22,7 +22,7 @@
 
 #include <stdbool.h>
 
-#define SMACKFS_MOUNT_OPT	"smackfsroot=*,smackfsdef=*"
+#define SMACKFS_MOUNT_OPT	"smackfsroot=system::ext_storage,smackfsdef=system::ext_storage"
 #define MMC_MOUNT_POINT		"/opt/storage/sdcard"
 
 #define BUF_LEN		20
@@ -63,4 +63,6 @@ bool mmc_check_mounted(const char *mount_point);
 int mmc_uevent_start(void);
 int mmc_uevent_stop(void);
 int get_block_number(void);
+
+void mmc_mount_done(void);
 #endif /* __MMC_HANDLER_H__ */

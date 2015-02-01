@@ -477,6 +477,12 @@ API int display_set_color_blind(int enable, struct blind_color_info *info)
 	char *arr[4];
 	int ret, ret_val;
 
+	if (!info)
+		return -EINVAL;
+
+	if (!!enable != enable)
+		return -EINVAL;
+
 	snprintf(str_enable, sizeof(str_enable), "%d", enable);
 	arr[0] = str_enable;
 	snprintf(str_red, sizeof(str_red), "%llu", BLIND_COLOR(info->RrCr, info->RgCg, info->RbCb));
@@ -606,9 +612,6 @@ API int display_lock_state(unsigned int s_bits, unsigned int flag,
 	else
 		p = STR_NULL;
 	pa[2] = p;
-
-	if (timeout < 0)
-		return -EINVAL;
 
 	snprintf(str_timeout, sizeof(str_timeout), "%d", timeout);
 	pa[3] = str_timeout;

@@ -23,6 +23,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <dirent.h>
@@ -334,4 +335,14 @@ int mount_check(const char* path)
 	}
 	endmntent(fp);
 	return ret;
+}
+
+void print_time(const char *prefix)
+{
+	struct timeval tv;
+	struct tm *tm;
+	gettimeofday(&tv, NULL);
+	tm = localtime(&(tv.tv_sec));
+	_D("%s --> %d:%02d:%02d %d",
+			prefix, tm->tm_hour, tm->tm_min, tm->tm_sec, tv.tv_usec);
 }

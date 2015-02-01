@@ -20,7 +20,7 @@
 
 #define METHOD_GET_REVISION	"GetRevision"
 
-static void get_revision(void)
+static void cpuinfo_revision(void)
 {
 	DBusError err;
 	DBusMessage *msg;
@@ -48,12 +48,16 @@ static void get_revision(void)
 	} else {
 		_D("Rinato");
 	}
+	if (val < 0)
+		_R("[NG] ---- %s", __func__);
+	else
+		_R("[OK] ---- %s : V(%d)", __func__, val);
 }
 
 static void cpuinfo_init(void *data)
 {
 	_I("start test");
-	get_revision();
+	cpuinfo_revision();
 }
 
 static void cpuinfo_exit(void *data)
@@ -63,7 +67,7 @@ static void cpuinfo_exit(void *data)
 
 static int cpuinfo_unit(int argc, char **argv)
 {
-	get_revision();
+	cpuinfo_revision();
 	return 0;
 }
 

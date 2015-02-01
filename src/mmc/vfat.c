@@ -32,8 +32,8 @@
 #define FS_VFAT_MOUNT_OPT	"uid=5000,gid=5000,dmask=0002,fmask=0002,iocharset=iso8859-1,utf8,shortname=mixed"
 
 static const char *vfat_arg[] = {
-	"/sbin/mkfs.vfat",
-	NULL, NULL,
+	"/usr/bin/newfs_msdos",
+	"-F", "32", "-O", "tizen", "-c", "8", NULL, NULL,
 };
 
 static const char *vfat_check_arg[] = {
@@ -94,7 +94,7 @@ static bool vfat_match(const char *devpath)
 		return false;
 	}
 
-	_D("MMC type : %s", vfat_info.name);
+	_I("MMC type : %s", vfat_info.name);
 	return true;
 }
 
@@ -111,10 +111,10 @@ static int vfat_mount(bool smack, const char *devpath, const char *mount_point)
 	do {
 		r = mount(devpath, mount_point, "vfat", 0, options);
 		if (!r) {
-			_D("Mounted mmc card [vfat]");
+			_I("Mounted mmc card [vfat]");
 			return 0;
 		}
-		_D("mount fail : r = %d, err = %d", r, errno);
+		_I("mount fail : r = %d, err = %d", r, errno);
 		usleep(100000);
 	} while (r < 0 && errno == ENOENT && retry-- > 0);
 
@@ -145,7 +145,7 @@ static void __CONSTRUCTOR__ module_init(void)
 /*
 static void __DESTRUCTOR__ module_exit(void)
 {
-	_D("module exit");
+	_I("module exit");
 	remove_fs(&vfat_ops);
 }
 */

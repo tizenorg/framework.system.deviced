@@ -5,6 +5,7 @@ SET(LIBDEVICED_SRCS
 	battery.c
 	control.c
 	display.c
+	dbus.c
 	haptic.c
 	led.c
 	mmc.c
@@ -22,6 +23,7 @@ pkg_check_modules(libpkgs REQUIRED
 	vconf
 	dlog
 	dbus-1
+	dbus-glib-1
 	edbus)
 
 FOREACH(flag ${libpkgs_CFLAGS})
@@ -30,7 +32,7 @@ ENDFOREACH(flag)
 
 # libdeviced
 ADD_LIBRARY(${PROJECT_NAME} SHARED ${LIBDEVICED_SRCS})
-TARGET_LINK_LIBRARIES(${PROJECT_NAME} ${libpkgs_LDFLAGS} shared)
+TARGET_LINK_LIBRARIES(${PROJECT_NAME} ${libpkgs_LDFLAGS})
 SET_TARGET_PROPERTIES(${PROJECT_NAME} PROPERTIES VERSION ${VERSION})
 # CMake Policy (CMP0002)
 # The logical name of executable and library targes

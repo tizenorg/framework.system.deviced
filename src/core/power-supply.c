@@ -22,24 +22,22 @@
 #include <vconf.h>
 #include <Ecore.h>
 #include <device-node.h>
-
+#include <journal/system.h>
 #include "devices.h"
-#include "predefine.h"
 #include "device-handler.h"
 #include "device-notifier.h"
 #include "udev.h"
 #include "log.h"
-#include "emulator.h"
 #include "display/poll.h"
 #include "display/setting.h"
 #include "proc/proc-handler.h"
 #include "config-parser.h"
 #include "power-supply.h"
+#include "sleep/sleep.h"
 
 #define BUFF_MAX		255
 #define POPUP_KEY_CONTENT		"_SYSPOPUP_CONTENT_"
 
-#define PREDEF_BATTERY_CF_OPENED	"battery_cf_opened"
 #define SIGNAL_CHARGEERR_RESPONSE	"ChargeErrResponse"
 #define SIGNAL_TEMP_GOOD		"TempGood"
 
@@ -59,12 +57,19 @@
 #define BATT_CHARGE_NOTI "0"
 #define BATT_FULL_NOTI   "2"
 #endif
+
+enum power_supply_init_type {
+	POWER_SUPPLY_NOT_READY = 0,
+	POWER_SUPPLY_INITIALIZED = 1,
+};
+
 struct popup_data {
 	char *name;
 	char *key;
 	char *value;
 };
 
+static int alert_popup = 0;
 static Ecore_Timer *power_timer = NULL;
 static Ecore_Timer *abnormal_timer = NULL;
 extern int battery_power_off_act(void *data);
@@ -74,7 +79,7 @@ static void pm_check_and_change(int bInserted)
 	static int old = -1;
 	if (old != bInserted) {
 		old = bInserted;
-		predefine_pm_change_state(LCD_NORMAL);
+		internal_pm_change_state(LCD_NORMAL);
 	}
 }
 
@@ -100,15 +105,10 @@ int check_lowbat_charge_device(int bInserted)
 			if (vconf_get_int(VCONFKEY_SYSMAN_BATTERY_STATUS_LOW, &bat_state) == 0) {
 				if(bat_state < VCONFKEY_SYSMAN_BAT_NORMAL
 						|| bat_state == VCONFKEY_SYSMAN_BAT_REAL_POWER_OFF) {
-					if (apps == NULL) {
-						apps = find_device("apps");
-						if (apps == NULL)
-							return 0;
-					}
+					FIND_DEVICE_INT(apps, "apps");
+
 					if(bat_state == VCONFKEY_SYSMAN_BAT_REAL_POWER_OFF)
 						value = "poweroff";
-					else if (bat_state == VCONFKEY_SYSMAN_BAT_POWER_OFF)
-						value = "extreme";
 					else
 						value = "warning";
 					params = malloc(sizeof(struct popup_data));
@@ -134,21 +134,12 @@ int check_lowbat_charge_device(int bInserted)
 	return -1;
 }
 
-static int changed_battery_cf(int argc, char **argv)
+static int changed_battery_cf(enum present_type status)
 {
-	int present_status;
 	struct popup_data *params;
 	static const struct device_ops *apps = NULL;
 
-	if (argc != 1)
-		return -EINVAL;
-	present_status = atoi(argv[0]);
-
-	if (apps == NULL) {
-		apps = find_device("apps");
-		if (apps == NULL)
-			return 0;
-	}
+	FIND_DEVICE_INT(apps, "apps");
 	params = malloc(sizeof(struct popup_data));
 	if (params == NULL) {
 		_E("Malloc failed");
@@ -159,7 +150,7 @@ static int changed_battery_cf(int argc, char **argv)
 	params->value = "battdisconnect";
 	if (apps->init == NULL || apps->exit == NULL)
 		goto out;
-	if (present_status == PRESENT_ABNORMAL)
+	if (status == PRESENT_ABNORMAL)
 		apps->init((void *)params);
 	else
 		apps->exit((void *)params);
@@ -197,11 +188,7 @@ static int clean_health_popup(void)
 	struct popup_data *params;
 	static const struct device_ops *apps = NULL;
 
-	if (apps == NULL) {
-		apps = find_device("apps");
-		if (apps == NULL)
-			return 0;
-	}
+	FIND_DEVICE_INT(apps, "apps");
 	params = malloc(sizeof(struct popup_data));
 	if (params == NULL) {
 		_E("Malloc failed");
@@ -275,17 +262,34 @@ static void full_noti_cb(void *data, DBusMessage *msg, DBusError *err)
 	_D("Inserted battery full noti : %d", noti_id);
 }
 
+static int check_noti(void)
+{
+#ifdef MICRO_DD
+	int r_disturb, s_disturb, r_block, s_block;
+	r_disturb = vconf_get_int("memory/shealth/sleep/do_not_disturb", &s_disturb);
+	r_block = vconf_get_bool("db/setting/blockmode_wearable", &s_block);
+	if ((r_disturb != 0 && r_block != 0) ||
+	    (s_disturb == 0 && s_block == 0)) {
+	    return 1;
+	}
+	return 0;
+#else
+	return 1;
+#endif
+}
+
 static int send_full_noti(enum charge_full_type state)
 {
 	int ret = 0;
-#ifdef MICRO_DD
-	char params[BUFF_MAX];
-	snprintf(params, sizeof(params), "%s %d", BATT_FULL_NOTI, state);
-	launch_evenif_exist(DEVICE_NOTIFIER, params);
-#else
+	int noti;
 	int retry;
 	char str_id[32];
 	char *arr[1];
+
+	noti = check_noti();
+
+	if (!noti)
+		return noti;
 
 	switch (state) {
 	case CHARGING_FULL:
@@ -322,16 +326,12 @@ static int send_full_noti(enum charge_full_type state)
 		_E("Failed to call dbus method (err: %d)", ret);
 	break;
 	}
-#endif
 	return ret;
 }
 
 int send_charge_noti(void)
 {
 	int ret = 0;
-#ifdef MICRO_DD
-	launch_evenif_exist(DEVICE_NOTIFIER, BATT_CHARGE_NOTI);
-#else
 	int retry;
 
 	for (retry = RETRY_MAX; retry > 0 ;retry--) {
@@ -346,7 +346,6 @@ int send_charge_noti(void)
 		}
 	}
 	_E("Failed to call dbus method (err: %d)", ret);
-#endif
 	return ret;
 }
 
@@ -358,6 +357,8 @@ void battery_noti(enum battery_noti_type type, enum battery_noti_status status)
 
 	if (type == DEVICE_NOTI_BATT_FULL && status == DEVICE_NOTI_ON &&
 	    full == CHARGING_NOT_FULL) {
+		if (charge == CHARGER_DISCHARGING)
+			send_charge_noti();
 		ret = send_full_noti(CHARGING_FULL);
 		if (ret == 0)
 			full = CHARGING_FULL;
@@ -383,7 +384,10 @@ static void noti_batt_full(void)
 {
 	char params[BUFF_MAX];
 	static int bat_full_noti = 0;
+	int r_disturb, s_disturb, r_block, s_block;
 
+	r_disturb = vconf_get_int("memory/shealth/sleep/do_not_disturb", &s_disturb);
+	r_block = vconf_get_bool("db/setting/blockmode_wearable", &s_block);
 	if (!battery.charge_full && bat_full_noti == 1) {
 		battery_noti(DEVICE_NOTI_BATT_FULL, DEVICE_NOTI_OFF);
 		bat_full_noti = 0;
@@ -394,7 +398,11 @@ static void noti_batt_full(void)
 		battery_noti(DEVICE_NOTI_BATT_FULL, DEVICE_NOTI_ON);
 		bat_full_noti = 1;
 		/* turn on LCD, if battery is full charged */
-		pm_change_internal(getpid(), LCD_NORMAL);
+		if ((r_disturb != 0 && r_block != 0) ||
+		    (s_disturb == 0 && s_block == 0))
+			pm_change_internal(getpid(), LCD_NORMAL);
+		else
+			_I("block LCD");
 		/* on the full charge state */
 		device_notify(DEVICE_NOTIFIER_FULLBAT, (void*)true);
 	}
@@ -423,7 +431,7 @@ static void check_power_supply(int state)
 	else
 		pm_lock_internal(INTERNAL_LOCK_TA, LCD_OFF, STAY_CUR_STATE, 0);
 out:
-	_I("ta device %d", state);
+	_I("ta device %d(capacity %d)", state, battery.capacity);
 
 	sync_cradle_status();
 }
@@ -431,7 +439,7 @@ out:
 static void update_present(enum battery_noti_status status)
 {
 	static int old = DEVICE_NOTI_OFF;
-	char params[BUFF_MAX];
+	enum present_type present;
 
 	if (old == status)
 		return;
@@ -439,10 +447,10 @@ static void update_present(enum battery_noti_status status)
 	old = status;
 	pm_change_internal(getpid(), LCD_NORMAL);
 	if (status == DEVICE_NOTI_ON)
-		snprintf(params, sizeof(params), "%d", PRESENT_ABNORMAL);
+		present = PRESENT_ABNORMAL;
 	else
-		snprintf(params, sizeof(params), "%d", PRESENT_NORMAL);
-	notify_action(PREDEF_BATTERY_CF_OPENED, 1, params);
+		present = PRESENT_NORMAL;
+	changed_battery_cf(present);
 }
 
 static void update_health(enum battery_noti_status status)
@@ -453,6 +461,12 @@ static void update_health(enum battery_noti_status status)
 		return;
 	_I("charge %d health %d", battery.charge_now, battery.health);
 	old = status;
+
+	if (alert_popup && status == DEVICE_NOTI_ON) {
+		_I("silent health popup");
+		return;
+	}
+
 	pm_change_internal(getpid(), LCD_NORMAL);
 	if (status == DEVICE_NOTI_ON) {
 		_I("popup - Battery health status is not good");
@@ -545,65 +559,6 @@ static void check_online(void)
 	}
 }
 
-static void charge_cb(struct main_data *ad)
-{
-	int val = -1;
-	int ret;
-	static int present_status = PRESENT_NORMAL;
-
-	lowbat_monitor(NULL);
-
-	if (device_get_property(DEVICE_TYPE_POWER, PROP_POWER_CHARGE_NOW, &battery.charge_now) != 0 ||
-	    device_get_property(DEVICE_TYPE_POWER, PROP_POWER_CAPACITY, &battery.capacity) != 0)
-		_E("fail to get battery node value");
-
-	if (battery.charge_now > 0)
-		battery.charge_now = CHARGER_CHARGING;
-	else
-		battery.charge_now = CHARGER_DISCHARGING;
-
-	if (battery.charge_now != CHARGER_CHARGING && battery.capacity == 0) {
-		_I("target will be shut down");
-		battery_power_off_act(NULL);
-		return;
-	}
-
-	ret = device_get_property(DEVICE_TYPE_POWER, PROP_POWER_PRESENT, &val);
-	if (ret != 0) {
-		battery.present = PRESENT_NORMAL;
-		_E("fail to get battery present value");
-		goto check_health;
-	}
-check_health:
-	ret = device_get_property(DEVICE_TYPE_POWER, PROP_POWER_HEALTH, &val);
-	if (ret != 0) {
-		battery.health = HEALTH_GOOD;
-		battery.ovp = OVP_NORMAL;
-		_E("failed to get battery health status");
-		goto check_full;
-	}
-	if (val != BATTERY_GOOD)
-		_I("Battery health status is not good (%d)", val);
-	if (val == BATTERY_OVERHEAT) {
-		battery.health = HEALTH_BAD;
-		battery.charge_now = CHARGER_ABNORMAL;
-		battery.temp = TEMP_HIGH;
-	} else if (val == BATTERY_COLD) {
-		battery.health = HEALTH_BAD;
-		battery.charge_now = CHARGER_ABNORMAL;
-		battery.temp = TEMP_LOW;
-	} else {
-		battery.health = HEALTH_GOOD;
-	}
-check_full:
-	ret = device_get_property(DEVICE_TYPE_POWER, PROP_POWER_CHARGE_FULL, &val);
-	if (ret == 0)
-		battery.charge_full = val;
-	noti_batt_full();
-	check_battery_status();
-	device_notify(DEVICE_NOTIFIER_BATTERY_CHARGING, (void*)battery.charge_now);
-}
-
 static int load_uevent(struct parse_result *result, void *user_data)
 {
 	struct battery_status *info = user_data;
@@ -634,29 +589,75 @@ static int load_uevent(struct parse_result *result, void *user_data)
 static void power_load_uevent(void)
 {
 	int ret;
+	static int initialized = POWER_SUPPLY_NOT_READY;
+
+	if (initialized == POWER_SUPPLY_INITIALIZED)
+		return;
 	ret = config_parse(POWER_SUPPLY_UEVENT, load_uevent, &battery);
 	if (ret < 0)
 		_E("Failed to load %s, %d Use default value!", POWER_SUPPLY_UEVENT, ret);
+	else
+		initialized = POWER_SUPPLY_INITIALIZED;
+}
+
+static int sleep_execute(void *data)
+{
+	static const struct device_ops *ops = NULL;
+
+	FIND_DEVICE_INT(ops, DEVICE_SLEEP_OPS);
+	return ops->execute(data);
 }
 
 void power_supply(void *data)
 {
 	int ret;
+	int status = POWER_SUPPLY_STATUS_DISCHARGING;
+	static struct battery_status old;
 
-	static int old_charge;
+	if (old.charge_now != battery.charge_now || battery.charge_now == CHARGER_ABNORMAL) {
+		vconf_set_int(VCONFKEY_SYSMAN_BATTERY_CHARGE_NOW, battery.charge_now);
+		power_supply_broadcast(CHARGE_NOW_SIGNAL, battery.charge_now);
+	}
 
-	if (old_charge != battery.charge_now || battery.charge_now == CHARGER_ABNORMAL) {
-		old_charge = battery.charge_now;
-		vconf_set_int(VCONFKEY_SYSMAN_BATTERY_CHARGE_NOW, old_charge);
-		power_supply_broadcast(CHARGE_NOW_SIGNAL, old_charge);
+	if (old.capacity != battery.capacity)
+		journal_system_battery_level(battery.capacity);
+	if (old.online != battery.online ||
+	    old.charge_now != battery.charge_now ||
+	    old.charge_full != battery.charge_full) {
+		switch (battery.charge_now)
+		{
+		case CHARGER_ABNORMAL:
+			status = POWER_SUPPLY_STATUS_NOT_CHARGING;
+			break;
+		case CHARGER_DISCHARGING:
+			if (battery.charge_full == CHARGING_FULL)
+				status = POWER_SUPPLY_STATUS_FULL;
+			else
+				status = POWER_SUPPLY_STATUS_DISCHARGING;
+			break;
+		case CHARGER_CHARGING:
+			status = POWER_SUPPLY_STATUS_CHARGING;
+			break;
+		}
+		journal_system_power_supply_status(battery.online, status);
 	}
 
 	lowbat_monitor(data);
 	check_online();
-	noti_batt_full();
+	if (old.charge_full != battery.charge_full) {
+		noti_batt_full();
+	}
+
+	old.capacity = battery.capacity;
+	old.online = battery.online;
+	old.charge_now = battery.charge_now;
+	old.charge_full = battery.charge_full;
+
 	check_battery_status();
 	device_notify(DEVICE_NOTIFIER_POWER_SUPPLY, NULL);
 	device_notify(DEVICE_NOTIFIER_BATTERY_CHARGING, (void*)battery.charge_now);
+	if (battery.online > POWER_SUPPLY_TYPE_BATTERY)
+		sleep_execute(NULL);
 }
 
 void power_supply_status_init(void)
@@ -786,15 +787,96 @@ static DBusMessage *dbus_get_charge_level(E_DBus_Object *obj, DBusMessage *msg)
 	return reply;
 }
 
+static DBusMessage *dbus_get_percent(E_DBus_Object *obj, DBusMessage *msg)
+{
+	DBusMessageIter iter;
+	DBusMessage *reply;
+	int ret;
+
+	ret = battery.capacity;
+
+	reply = dbus_message_new_method_return(msg);
+	dbus_message_iter_init_append(reply, &iter);
+	dbus_message_iter_append_basic(&iter, DBUS_TYPE_INT32, &ret);
+	return reply;
+}
+
+static DBusMessage *dbus_get_percent_raw(E_DBus_Object *obj, DBusMessage *msg)
+{
+	DBusMessageIter iter;
+	DBusMessage *reply;
+	int ret, val;
+
+	ret = device_get_property(DEVICE_TYPE_POWER, PROP_POWER_CAPACITY_RAW, &val);
+	if (ret < 0)
+		goto out;
+
+	if (val > 10000)
+		val = 10000;
+
+	ret = val;
+
+out:
+	reply = dbus_message_new_method_return(msg);
+	dbus_message_iter_init_append(reply, &iter);
+	dbus_message_iter_append_basic(&iter, DBUS_TYPE_INT32, &ret);
+	return reply;
+}
+
+static DBusMessage *dbus_is_full(E_DBus_Object *obj, DBusMessage *msg)
+{
+	DBusMessageIter iter;
+	DBusMessage *reply;
+	int ret;
+
+	ret = battery.charge_full;
+
+	reply = dbus_message_new_method_return(msg);
+	dbus_message_iter_init_append(reply, &iter);
+	dbus_message_iter_append_basic(&iter, DBUS_TYPE_INT32, &ret);
+	return reply;
+}
+
+static DBusMessage *dbus_get_health(E_DBus_Object *obj, DBusMessage *msg)
+{
+	DBusMessageIter iter;
+	DBusMessage *reply;
+	int ret;
+
+	ret = battery.health;
+
+	reply = dbus_message_new_method_return(msg);
+	dbus_message_iter_init_append(reply, &iter);
+	dbus_message_iter_append_basic(&iter, DBUS_TYPE_INT32, &ret);
+	return reply;
+}
+
 static const struct edbus_method edbus_methods[] = {
-	{ CHARGER_STATUS_SIGNAL, NULL, "i", dbus_get_charger_status },
-	{ CHARGE_NOW_SIGNAL,     NULL, "i", dbus_get_charge_now },
-	{ CHARGE_LEVEL_SIGNAL,   NULL, "i", dbus_get_charge_level },
+	{ CHARGER_STATUS_SIGNAL,      NULL, "i", dbus_get_charger_status },
+	{ CHARGE_NOW_SIGNAL,          NULL, "i", dbus_get_charge_now },
+	{ CHARGE_LEVEL_SIGNAL,        NULL, "i", dbus_get_charge_level },
+	{ CHARGE_CAPACITY_SIGNAL,     NULL, "i", dbus_get_percent },
+	{ CHARGE_CAPACITY_LAW_SIGNAL, NULL, "i", dbus_get_percent_raw },
+	{ CHARGE_FULL_SIGNAL,         NULL, "i", dbus_is_full },
+	{ CHARGE_HEALTH_SIGNAL,       NULL, "i", dbus_get_health },
 };
+
+static int alert_popup_cb(keynode_t *key_nodes, void *data)
+{
+	alert_popup = vconf_keynode_get_bool(key_nodes);
+	_D("changed alert popup %d", alert_popup);
+	return alert_popup;
+}
 
 int power_supply_init(void *data)
 {
 	int ret;
+
+	ret = vconf_get_bool(VCONFKEY_TESTMODE_TEMP_ALERT_POPUP, &alert_popup);
+	if (ret < 0)
+		_E("fail to get alert popup status");
+	vconf_notify_key_changed(VCONFKEY_TESTMODE_TEMP_ALERT_POPUP, (void *)alert_popup_cb, NULL);
+
 	ret = register_edbus_method(DEVICED_PATH_BATTERY, edbus_methods, ARRAY_SIZE(edbus_methods));
 	if (ret < 0)
 		_E("fail to init edbus method(%d)", ret);
@@ -804,11 +886,7 @@ int power_supply_init(void *data)
 	if (ret < 0)
 		_E("fail to init edbus signal(%d)", ret);
 
-	register_action(PREDEF_BATTERY_CF_OPENED, changed_battery_cf,
-		NULL, NULL);
-
 	/* for simple noti change cb */
-	emulator_add_callback("device_charge_chgdet", (void *)charge_cb, data);
 	power_supply_status_init();
 	power_supply(NULL);
 	return ret;

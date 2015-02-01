@@ -20,7 +20,7 @@
 #ifndef __DEVICE_HANDLER_H__
 #define __DEVICE_HANDLER_H__
 
-#include "data.h"
+#include "common.h"
 
 enum extcon_type {
 	EXTCON_TA = 0,
@@ -102,4 +102,5 @@ int get_usb_state_direct(void);
 
 void sync_cradle_status(void);
 
+void internal_pm_change_state(unsigned int s_bits);
 #endif /* __DEVICE_HANDLER_H__ */

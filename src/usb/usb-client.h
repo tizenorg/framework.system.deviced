@@ -48,45 +48,50 @@
 #define UDEV_PROP_KEY_CHGDET       "CHGDET"
 #define UDEV_PROP_VALUE_USB        "usb"
 
-#define USB_CON_SET    "set"
-#define USB_CON_UNSET  "unset"
+#define USB_CON_START  "start"
+#define USB_CON_STOP   "stop"
 
 #define USB_RESTRICT  "restrict"
 #define USB_ERROR     "error"
 
-//#define USB_DEBUG
+#define USB_BUF_LEN 64
+
+#ifndef VCONFKEY_USB_CONFIGURATION_ENABLED
+#define VCONFKEY_USB_CONFIGURATION_ENABLED "memory/private/usb/conf_enabled"
+#endif
+
+enum internal_usb_mode {
+	SET_USB_DIAG_RMNET = 11,
+};
 
 enum usbclient_setting_option {
-	SET_CONFIGURATION = 0x0001,
-	SET_OPERATION     = 0x0010,
-	SET_NOTIFICATION  = 0x0100,
+	SET_CONFIGURATION = 0x01,
+	SET_OPERATION     = 0x02,
+	SET_NOTIFICATION  = 0x04,
 };
 
-struct xmlSupported {
-	int mode;
+enum usb_enabled {
+	USB_CONF_DISABLED,
+	USB_CONF_ENABLED,
 };
 
-struct xmlOperation {
-	char *name;
-	char *oper;
-	bool background;
+struct usb_configuration {
+	char name[USB_BUF_LEN];
+	char value[USB_BUF_LEN];
 };
 
-struct xmlConfiguration {
-	char *name;
-	char *path;
-	char *value;
+struct usb_operation {
+	char name[USB_BUF_LEN];
+	char oper[USB_BUF_LEN];
 };
 
-/* XML */
-int make_empty_configuration_list(void);
+/* config */
 int make_configuration_list(int usb_mode);
 void release_configuration_list(void);
-int make_supported_confs_list(void);
-void release_supported_confs_list(void);
 int make_operation_list(int usb_mode, char *action);
 void release_operations_list(void);
 
+int get_root_path(char **path);
 int get_operations_list(dd_list **list);
 int get_configurations_list(dd_list **list);
 
@@ -98,24 +103,29 @@ void tethering_status_changed(keynode_t* key, void *data);
 
 /* Check usb state */
 int get_default_mode(void);
-int check_current_usb_state(void);
+int get_current_usb_physical_state(void);
+int get_current_usb_logical_state(void);
 int get_current_usb_mode(void);
 int get_selected_usb_mode(void);
 int get_debug_mode(void);
 int change_selected_usb_mode(int mode);
 int update_current_usb_mode(int mode);
 int update_usb_state(int state);
+unsigned int get_current_usb_gadget_info(int mode);
 
 /* Unset usb mode */
 void unset_client_mode(int mode, bool change);
 
 /* USB control */
-int control_start(void);
-int control_stop(void);
+int control_start(enum device_flags flags);
+int control_stop(enum device_flags flags);
 int control_status(void);
 void wait_until_booting_done(void);
 void usbclient_init_booting_done(void);
 void act_usb_connected(void);
+int register_usbclient_dbus_methods(void);
+void send_msg_usb_state_changed(void);
+void send_msg_usb_mode_changed(void);
 
 /* USB syspopup */
 void launch_syspopup(char *str);
@@ -123,5 +133,8 @@ void launch_syspopup(char *str);
 /* Change usb mode */
 void change_client_setting(int options);
 bool get_wait_configured(void);
+
+/* For SDK */
+void usb_state_changed(int state);
 
 #endif /* __USB_CLIENT_H__ */

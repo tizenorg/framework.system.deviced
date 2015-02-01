@@ -55,8 +55,41 @@ out:
 	return reply;
 }
 
+static DBusMessage *edbus_factory_15_launch(E_DBus_Object *obj, DBusMessage *msg)
+{
+	DBusError err;
+	DBusMessageIter iter;
+	DBusMessage *reply;
+	pid_t pid;
+	int ret;
+	int argc;
+	char *argv;
+	char param[32];
+
+	dbus_error_init(&err);
+
+	if (!dbus_message_get_args(msg, &err,
+		    DBUS_TYPE_STRING, &argv, DBUS_TYPE_INVALID)) {
+		_E("there is no message");
+		ret = -EINVAL;
+		goto out;
+	}
+	sprintf(param, "%s", argv);
+	_D("param %s", param);
+
+	launch_evenif_exist("/usr/bin/factory-15-env.sh", param);
+out:
+	reply = dbus_message_new_method_return(msg);
+	dbus_message_iter_init_append(reply, &iter);
+	dbus_message_iter_append_basic(&iter, DBUS_TYPE_INT32, &ret);
+
+	return reply;
+}
+
+
 static const struct edbus_method edbus_methods[] = {
 	{ "Launch", "s",   "i", edbus_testmode_launch },
+	{ "factory15", "s",   "i", edbus_factory_15_launch },
 	/* Add methods here */
 };
 

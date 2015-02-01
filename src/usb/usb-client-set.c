@@ -34,20 +34,21 @@ const static bool eng_mode = true;
 const static bool eng_mode = false;
 #endif
 
-struct ticker_data {
-	char *name;
-	int type;
-};
-
 static int debug = 0;
 
 static int write_sysfs(char *path, char *value)
 {
 	FILE *fp;
 	int ret;
+	char *conf;
 
-	if (!path || !value)
+	if (strlen(path) == 0)
 		return -ENOMEM;
+
+	if (strlen(value) > 0)
+		conf = value;
+	else
+		conf = " ";
 
 	fp = fopen(path, "w");
 	if (!fp) {
@@ -55,14 +56,12 @@ static int write_sysfs(char *path, char *value)
 		return -ENOMEM;
 	}
 
-	ret = fwrite(value, sizeof(char), strlen(value), fp);
-	if (ret < strlen(value)) {
-		_E("FAIL: fwrite(%s)", value);
+	ret = fwrite(conf, sizeof(char), strlen(conf), fp);
+	if (ret < strlen(conf)) {
+		_E("FAIL: fwrite(%s)", conf);
 		ret = -ENOMEM;
-		goto out;
 	}
 
-out:
 	if (fclose(fp) != 0)
 		_E("FAIL: fclose()");
 	return ret;
@@ -71,19 +70,25 @@ out:
 static int set_configurations_to_sysfs(dd_list *list)
 {
 	dd_list *l;
-	struct xmlConfiguration *conf;
+	struct usb_configuration *conf;
 	int ret;
+	char *root_path, path[BUF_MAX];
 
 	if (!list)
 		return -EINVAL;
 
-	DD_LIST_FOREACH(list, l, conf) {
-		if (!(conf->value))
-			continue;
+	ret = get_root_path(&root_path);
+	if (ret < 0) {
+		_E("Failed to get root path for usb configuration (%d)", ret);
+		return ret;
+	}
 
-		ret = write_sysfs(conf->path, conf->value);
+	DD_LIST_FOREACH(list, l, conf) {
+		snprintf(path, sizeof(path), "%s/%s", root_path, conf->name);
+		_I("Usb conf: (%s, %s)", path, conf->value);
+		ret = write_sysfs(path, conf->value);
 		if (ret < 0) {
-			_E("FAIL: write_sysfs(%s, %s)", conf->path, conf->value);
+			_E("FAIL: write_sysfs(%s, %s)", path, conf->value);
 			return ret;
 		}
 	}
@@ -93,16 +98,16 @@ static int set_configurations_to_sysfs(dd_list *list)
 static void run_operations_for_usb_mode(dd_list *list)
 {
 	dd_list *l;
-	int ret;
-	struct xmlOperation *oper;
+	int ret, argc;
+	struct usb_operation *oper;
 
 	if (!list)
 		return ;
 
-	 DD_LIST_FOREACH(list, l, oper) {
-		 ret = launch_app_cmd(oper->oper);
-		 _I("operation: %s(%d)", oper->oper, ret);
-	 }
+	DD_LIST_FOREACH(list, l, oper) {
+		ret = launch_app_cmd(oper->oper);
+		_I("operation: %s(%d)", oper->oper, ret);
+	}
 }
 
 void unset_client_mode(int mode, bool change)
@@ -126,61 +131,15 @@ void unset_client_mode(int mode, bool change)
 				_E("FAIL: set_configurations_to_sysfs()");
 		}
 	}
+	release_configuration_list();
 
-	ret = make_operation_list(mode, USB_CON_UNSET);
+	ret = make_operation_list(mode, USB_CON_STOP);
 	if (ret == 0) {
 		ret = get_operations_list(&oper_list);
 		if (ret == 0)
 			run_operations_for_usb_mode(oper_list);
 	}
-
 	release_operations_list();
-}
-
-static void launch_ticker_notification(int cur_mode, int sel_mode)
-{
-	struct ticker_data ticker;
-	const struct device_ops *ticker_ops;
-
-	switch(sel_mode) {
-	case SET_USB_DEFAULT:
-	case SET_USB_SDB:
-	case SET_USB_SDB_DIAG:
-		if (cur_mode == SET_USB_DEFAULT
-				|| cur_mode == SET_USB_SDB
-				|| cur_mode == SET_USB_SDB_DIAG)
-			return;
-
-		ticker.name = TICKER_TYPE_DEFAULT;
-		ticker.type = 0; /* WITHOUT_QUEUE */
-		break;
-	case SET_USB_RNDIS:
-	case SET_USB_RNDIS_DIAG:
-	case SET_USB_RNDIS_SDB:
-		if (cur_mode == SET_USB_RNDIS
-				|| cur_mode == SET_USB_RNDIS_TETHERING
-				|| cur_mode == SET_USB_RNDIS_DIAG
-				|| cur_mode == SET_USB_RNDIS_SDB)
-			return;
-
-		ticker.name = TICKER_TYPE_SSH;
-		ticker.type = 0; /* WITHOUT_QUEUE */
-		break;
-	case SET_USB_NONE:
-	case SET_USB_RNDIS_TETHERING:
-	default:
-		return;
-	}
-
-	ticker_ops = find_device("ticker");
-
-	if (get_cradle_status() > 0)
-		return;
-
-	if (ticker_ops && ticker_ops->init)
-		ticker_ops->init(&ticker);
-	else
-		_E("cannot find \"ticker\" ops");
 }
 
 static int get_selected_mode_by_debug_mode(int mode)
@@ -325,33 +284,33 @@ void change_client_setting(int options)
 		ret = make_configuration_list(sel_mode);
 		if (ret < 0) {
 			_E("FAIL: make_configuration_list(%d)", sel_mode);
-			goto out_configuration;
+			goto out;
 		}
 
 		ret = get_configurations_list(&conf_list);
 		if (ret < 0) {
 			_E("failed to get configuration list");
-			goto out_configuration;
+			goto out;
 		}
 
 		ret = set_configurations_to_sysfs(conf_list);
 		if (ret < 0) {
 			_E("FAIL: set_configurations_to_sysfs()");
-			goto out_configuration;
+			goto out;
 		}
 	}
 
 	if (options & SET_OPERATION) {
-		ret = make_operation_list(sel_mode, USB_CON_SET);
+		ret = make_operation_list(sel_mode, USB_CON_START);
 		if (ret < 0) {
 			_E("FAIL: make_operation_list()");
-			goto out_operation;
+			goto out;
 		}
 
 		ret = get_operations_list(&oper_list);
 		if (ret < 0) {
 			_E("failed to get operation list");
-			goto out_operation;
+			goto out;
 		}
 
 		if (update_usb_state(VCONFKEY_SYSMAN_USB_AVAILABLE) < 0)
@@ -363,17 +322,14 @@ void change_client_setting(int options)
 	}
 
 	if (options & SET_NOTIFICATION) {
-		launch_ticker_notification(cur_mode, sel_mode);
+		/* Do nothing */
 	}
 
 	ret = 0;
 
-out_operation:
+out:
 	release_operations_list();
-
-out_configuration:
-	if (make_configuration_list(SET_USB_NONE) < 0)
-		_E("Release configurations info error");
+	release_configuration_list();
 
 	if (ret < 0)
 		launch_syspopup(USB_ERROR);
@@ -390,103 +346,6 @@ void client_mode_changed(keynode_t* key, void *data)
 
 	change_client_setting(SET_CONFIGURATION | SET_OPERATION | SET_NOTIFICATION);
 }
-
-#if 0
-void client_mode_changed(keynode_t* key, void *data)
-{
-	int sel_mode;
-	int cur_mode;
-	int ret;
-	char *action;
-	dd_list *conf_list;
-	dd_list *oper_list;
-
-	if (control_status() == DEVICE_OPS_STATUS_STOP) {
-		launch_syspopup(USB_RESTRICT);
-		return;
-	}
-
-	sel_mode = get_selected_usb_mode();
-	if (sel_mode <= SET_USB_NONE) {
-		_E("Getting selected usb mode error(%d)", sel_mode);
-		return;
-	}
-
-	if (check_usb_tethering()) {
-		_I("Turning on the usb tethering");
-		return;
-	}
-
-	ret = check_debug_mode(sel_mode);
-	if (ret != 0)
-		return;
-
-	sel_mode = check_first_eng_mode(sel_mode);
-
-	cur_mode = get_current_usb_mode();
-	if (cur_mode < SET_USB_NONE) {
-		_E("Getting current usb mode error(%d)", cur_mode);
-		return ;
-	}
-
-	if (cur_mode == sel_mode) {
-		_I("Current usb mode(%d) is same with selected usb mode(%d)", cur_mode, sel_mode);
-		return ;
-	}
-
-	if (cur_mode != SET_USB_NONE) {
-		unset_client_mode(cur_mode);
-	}
-
-	ret = make_configuration_list(sel_mode);
-	if (ret < 0) {
-		_E("FAIL: make_configuration_list(%d)", sel_mode);
-		goto out;
-	}
-
-	ret = make_operation_list(sel_mode, USB_CON_SET);
-	if (ret < 0) {
-		_E("FAIL: make_operation_list()");
-		goto out;
-	}
-
-	ret = get_configurations_list(&conf_list);
-	if (ret < 0) {
-		_E("failed to get configuration list");
-		goto out;
-	}
-
-	ret = get_operations_list(&oper_list);
-	if (ret < 0) {
-		_E("failed to get operation list");
-		goto out;
-	}
-
-	ret = set_configurations_to_sysfs(conf_list);
-	if (ret < 0) {
-		_E("FAIL: set_configurations_to_sysfs()");
-		goto out;
-	}
-
-	update_current_usb_mode(sel_mode);
-
-	run_operations_for_usb_mode(oper_list);
-
-	launch_ticker_notification(cur_mode, sel_mode);
-
-	ret = 0;
-
-out:
-	if (ret < 0)
-		launch_syspopup(USB_ERROR);
-
-	release_operations_list();
-	ret = make_configuration_list(SET_USB_NONE);
-	if (ret < 0)
-		_E("release configurations info error");
-	return;
-}
-#endif
 
 void debug_mode_changed(keynode_t* key, void *data)
 {

@@ -20,6 +20,7 @@
 #ifndef __TEST_H__
 #define __TEST_H__
 #include <stdio.h>
+#include <stdarg.h>
 #include <errno.h>
 #include <E_DBus.h>
 
@@ -103,5 +104,5 @@ DBusMessage *deviced_dbus_method_sync_with_reply(const char *dest, const char *p
 void add_test(const struct test_ops *c);
 void remove_test(const struct test_ops *c);
 const struct test_ops *find_test(const char *name);
-
+void _R (const char *format, ...);
 #endif

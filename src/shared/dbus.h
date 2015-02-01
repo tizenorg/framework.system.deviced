@@ -116,6 +116,18 @@
 #define DEVICED_PATH_TESTMODE               DEVICED_OBJECT_PATH"/Testmode"
 #define DEVICED_INTERFACE_TESTMODE           DEVICED_INTERFACE_NAME".Testmode"
 
+/* Apps service */
+#define DEVICED_PATH_APPS               DEVICED_OBJECT_PATH"/Apps"
+#define DEVICED_INTERFACE_APPS           DEVICED_INTERFACE_NAME".Apps"
+
+/* GPIO service: status check about gpio */
+#define DEVICED_PATH_GPIO                    DEVICED_OBJECT_PATH"/Gpio"
+#define DEVICED_INTERFACE_GPIO               DEVICED_INTERFACE_NAME".Gpio"
+
+/* HDMICEC service: status check about gpio */
+#define DEVICED_PATH_HDMICEC                    DEVICED_OBJECT_PATH"/HdmiCec"
+#define DEVICED_INTERFACE_HDMICEC               DEVICED_INTERFACE_NAME".HdmiCec"
+
 /*
  * Resource daemon
  */
@@ -209,6 +221,10 @@ int dbus_method_sync(const char *dest, const char *path,
 		const char *interface, const char *method,
 		const char *sig, char *param[]);
 
+int dbus_method_sync_timeout(const char *dest, const char *path,
+		const char *interface, const char *method,
+		const char *sig, char *param[], int timeout);
+
 int dbus_method_async(const char *dest, const char *path,
 		const char *interface, const char *method,
 		const char *sig, char *param[]);
@@ -218,4 +234,6 @@ typedef void (*dbus_pending_cb)(void *data, DBusMessage *msg, DBusError *err);
 int dbus_method_async_with_reply(const char *dest, const char *path,
 		const char *interface, const char *method,
 		const char *sig, char *param[], dbus_pending_cb cb, int timeout, void *data);
+
+int check_systemd_active(void);
 #endif

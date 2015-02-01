@@ -59,6 +59,37 @@ typedef Eina_List dd_list;
 #else
 #include <glib.h>
 typedef GList dd_list;
+
+/*
+   cover crash from corrupted double linked list under the glib 2.36.4
+   if glib version upper than 2.36.3, exchange it to g_list_remove
+*/
+static inline GList* g_list_check_remove(GList* list, gpointer data)
+{
+	GList *temp;
+	temp = list;
+	if (!temp)
+		goto out;
+	while (temp != NULL) {
+		if (temp->data != data)
+			temp = temp->next;
+		else {
+			if (temp->prev != NULL && temp->prev->next == temp)
+				temp->prev->next = temp->next;
+			if (temp->next != NULL && temp->next->prev == temp)
+				temp->next->prev = temp->prev;
+			if (temp == list)
+				list = list->next;
+			temp->prev = NULL;
+			temp->next = NULL;
+			g_list_free(list);
+			break;
+		}
+	}
+out:
+	return list;
+}
+
 #define DD_LIST_PREPEND(a, b)		\
 	a = g_list_prepend(a, (gpointer)b)
 #define DD_LIST_APPEND(a, b)		\

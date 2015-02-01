@@ -7,6 +7,7 @@ ENDIF()
 
 SET(SRCS
 	devicectl.c
+	usb.c
 )
 INCLUDE_DIRECTORIES(${CMAKE_SOURCE_DIR}/src)
 

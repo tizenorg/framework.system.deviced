@@ -43,8 +43,6 @@
 #include "device-node.h"
 #include "lock-detector.h"
 #include "display-ops.h"
-#include "core/queue.h"
-#include "core/data.h"
 #include "core/devices.h"
 #include "core/device-notifier.h"
 #include "core/device-handler.h"
@@ -68,6 +66,13 @@
 #define LOCK_SCREEN_INPUT_TIMEOUT	10000
 #define LOCK_SCREEN_CONTROL_TIMEOUT	5000
 #define DD_LCDOFF_INPUT_TIMEOUT		3000
+#define ALWAYS_ON_TIMEOUT			3600000
+
+#define GESTURE_STR		"gesture"
+#define POWER_KEY_STR		"powerkey"
+#define TOUCH_STR		"touch"
+#define EVENT_STR		"event"
+#define UNKNOWN_STR		"unknown"
 
 unsigned int pm_status_flag;
 
@@ -94,6 +99,10 @@ static int lock_screen_timeout = LOCK_SCREEN_INPUT_TIMEOUT;
 static int hdmi_state = 0;
 static int tts_state = false;
 static struct timeval lcdon_tv;
+static int lcd_paneloff_mode = false;
+static int stay_touchscreen_off = false;
+static Eina_List *lcdon_ops = NULL;
+static bool lcdon_broadcast = false;
 
 /* default transition, action fuctions */
 static int default_trans(int evt);
@@ -138,8 +147,8 @@ static int trans_table[S_END][EVENT_END] = {
 #define GET_STANDBY_MODE_STATE(x) ((x >> SHIFT_LOCK_FLAG) & STANDBY_MODE_BIT)
 #define MASK32				0xffffffff
 #define BOOTING_DONE_WATING_TIME	60000	/* 1 minute */
-#define LOCK_TIME_ERROR			600	/* 600 seconds */
 #define LOCK_TIME_WARNING		60	/* 60 seconds */
+#define ALPM_CLOCK_WAITING_TIME		3000	/* 3 seconds */
 
 #define ACTIVE_ACT "active"
 #define INACTIVE_ACT "inactive"
@@ -152,6 +161,8 @@ static int trans_table[S_END][EVENT_END] = {
 #define BRIGHTNESS_CHANGE_STEP		10
 #define HBM_LUX_THRESHOLD		32768	/* lux */
 #define LCD_ALWAYS_ON			0
+#define ACCEL_SENSOR_ON			1
+#define CONTINUOUS_SAMPLING		1
 #define LCDOFF_TIMEOUT			500	/* milli second */
 
 #define DIFF_TIMEVAL_MS(a, b) \
@@ -171,6 +182,8 @@ struct display_config display_conf = {
 	.control_display	= 0,
 	.powerkey_doublepress	= 0,
 	.alpm_on		= 0,
+	.accel_sensor_on	= ACCEL_SENSOR_ON,
+	.continuous_sampling	= CONTINUOUS_SAMPLING,
 };
 
 struct display_function_info display_info = {
@@ -211,6 +224,14 @@ static void set_process_active(bool flag, pid_t pid)
 		_E("Fail to send dbus signal to resourced!!");
 }
 
+bool check_lock_state(int state)
+{
+	if (cond_head[state] != NULL)
+		return true;
+
+	return false;
+}
+
 int get_standby_state(void)
 {
 	return standby_state;
@@ -222,10 +243,23 @@ static inline void set_standby_state(bool state)
 		standby_state = state;
 }
 
-void broadcast_lcd_on(void)
+void broadcast_lcd_on(enum device_flags flags)
 {
+	char *arr[1];
+
+	if (flags & LCD_ON_BY_GESTURE)
+		arr[0] = GESTURE_STR;
+	else if (flags & LCD_ON_BY_POWER_KEY)
+		arr[0] = POWER_KEY_STR;
+	else if (flags & LCD_ON_BY_EVENT)
+		arr[0] = EVENT_STR;
+	else if (flags & LCD_ON_BY_TOUCH)
+		arr[0] = TOUCH_STR;
+	else
+		arr[0] = UNKNOWN_STR;
+
 	broadcast_edbus_signal(DEVICED_PATH_DISPLAY, DEVICED_INTERFACE_DISPLAY,
-	    SIGNAL_LCD_ON, NULL, NULL);
+	    SIGNAL_LCD_ON, "s", arr);
 }
 
 void broadcast_lcd_off(void)
@@ -245,38 +279,147 @@ void tts_lcd_off(void)
 		_E("Failed to tts(%d)", ret);
 }
 
-inline void lcd_on_procedure(void)
+static unsigned long get_lcd_on_flags(void)
 {
-	broadcast_lcd_on();
+	unsigned long flags = NORMAL_MODE;
+
+	if (lcd_paneloff_mode)
+		flags |= LCD_PANEL_OFF_MODE;
+
+	if (stay_touchscreen_off)
+		flags |= TOUCH_SCREEN_OFF_MODE;
+
+	if (get_ambient_mode != NULL &&
+	    get_ambient_mode() == true) {
+		flags |= AMBIENT_MODE;
+		flags |= LCD_PHASED_TRANSIT_MODE;
+	}
+	return flags;
+}
+
+void lcd_on_procedure(int state, enum device_flags flag)
+{
+	Eina_List *l = NULL;
+	const struct device_ops *ops = NULL;
+	unsigned long flags = get_lcd_on_flags();
+	flags |= flag;
+
+	/* send LCDOn dbus signal */
+	if (!lcdon_broadcast) {
+		broadcast_lcd_on(flags);
+		lcdon_broadcast = true;
+	}
+
+	if (flags & AMBIENT_MODE &&
+	    check_alpm_lcdon_ready != NULL)
+		check_alpm_lcdon_ready();
+
 	/* AMOLED Low Power Mode off */
-	if (display_conf.alpm_on == true &&
-	    alpm_set_state != NULL) {
-		if (alpm_set_state(false) < 0)
+	if (flags & AMBIENT_MODE) {
+		pm_unlock_internal(INTERNAL_LOCK_ALPM, LCD_OFF,
+		    PM_SLEEP_MARGIN);
+
+		if (alpm_get_state != NULL &&
+		    alpm_get_state() == false &&
+		    backlight_ops.get_lcd_power() == PM_LCD_POWER_ON)
+			return;
+		if (alpm_set_state != NULL &&
+		    alpm_set_state(false) < 0)
 			_E("Failed to ALPM off");
 	}
-	backlight_ops.update();
-	backlight_ops.on();
-	touch_ops.screen_on();
+
+	if (!(flags & LCD_PHASED_TRANSIT_MODE)) {
+		/* Update brightness level */
+		if (state == LCD_DIM)
+			backlight_ops.dim();
+		else if (state == LCD_NORMAL)
+			backlight_ops.update();
+	}
+
+	if (flags & AMBIENT_MODE) {
+		if (state == LCD_DIM)
+			set_setting_pmstate(S_LCDDIM);
+		else if (state == LCD_NORMAL)
+			set_setting_pmstate(S_NORMAL);
+	}
+
+	EINA_LIST_FOREACH(lcdon_ops, l, ops)
+		ops->start(flags);
+
+	if (CHECK_OPS(keyfilter_ops, backlight_enable))
+		keyfilter_ops->backlight_enable(true);
+}
+
+static inline unsigned long get_lcd_off_flags(void)
+{
+	unsigned long flags = NORMAL_MODE;
+
+	if (get_ambient_mode != NULL &&
+	    get_ambient_mode() == true)
+		flags |= AMBIENT_MODE;
+
+	if (flags & AMBIENT_MODE)
+		flags |= LCD_PHASED_TRANSIT_MODE;
+
+	return flags;
 }
 
 inline void lcd_off_procedure(void)
 {
+	Eina_List *l = NULL;
+	const struct device_ops *ops = NULL;
+	unsigned long flags = get_lcd_off_flags();
+
 	if (standby_mode) {
 		_D("standby mode! lcd off logic is skipped");
 		return;
 	}
 	/* AMOLED Low Power Mode on */
-	if (display_conf.alpm_on == true &&
-	    alpm_set_state != NULL) {
-		if (alpm_set_state(true) < 0)
+	if (flags & AMBIENT_MODE) {
+		if (alpm_get_state != NULL &&
+		    alpm_get_state() == true)
+			return;
+		if (alpm_set_state != NULL &&
+		    alpm_set_state(true) < 0)
 			_E("Failed to ALPM on!");
+
+		pm_lock_internal(INTERNAL_LOCK_ALPM, LCD_OFF,
+		    STAY_CUR_STATE, ALPM_CLOCK_WAITING_TIME);
 	}
-	broadcast_lcd_off();
-	backlight_ops.off();
-	touch_ops.screen_off();
+
+	if (lcdon_broadcast) {
+		broadcast_lcd_off();
+		lcdon_broadcast = false;
+	}
+	if (CHECK_OPS(keyfilter_ops, backlight_enable))
+		keyfilter_ops->backlight_enable(false);
+
+	if (flags & AMBIENT_MODE)
+		set_setting_pmstate(S_LCDOFF);
+
+	EINA_LIST_REVERSE_FOREACH(lcdon_ops, l, ops)
+		ops->stop(flags);
 
 	if (tts_state)
 		tts_lcd_off();
+}
+
+void set_stay_touchscreen_off(int val)
+{
+	_D("stay touch screen off : %d", val);
+	stay_touchscreen_off = val;
+
+	lcd_on_procedure(LCD_NORMAL, LCD_ON_BY_EVENT);
+	set_setting_pmstate(LCD_NORMAL);
+}
+
+void set_lcd_paneloff_mode(int val)
+{
+	_D("lcd paneloff mode : %d", val);
+	lcd_paneloff_mode = val;
+
+	lcd_on_procedure(LCD_NORMAL, LCD_ON_BY_EVENT);
+	set_setting_pmstate(LCD_NORMAL);
 }
 
 int low_battery_state(int val)
@@ -390,10 +533,8 @@ static void print_node(int next)
 		diff = difftime(now, n->time);
 		ctime_r(&n->time, buf);
 
-		if (diff > LOCK_TIME_ERROR)
-			_E("over %.0f s, pid: %5d, lock time: %s", diff, n->pid, buf);
-		else if (diff > LOCK_TIME_WARNING)
-			_I("over %.0f s, pid: %5d, lock time: %s", diff, n->pid, buf);
+		if (diff > LOCK_TIME_WARNING)
+			_W("over %.0f s, pid: %5d, lock time: %s", diff, n->pid, buf);
 		else
 			_I("pid: %5d, lock time: %s", n->pid, buf);
 
@@ -433,7 +574,7 @@ static Eina_Bool del_dim_cond(void *data)
 	char pname[PATH_MAX];
 	pid_t pid = (pid_t)data;
 
-	_I("delete prohibit dim condition by timeout\n");
+	_I("delete prohibit dim condition by timeout (%d)", pid);
 
 	tmp = find_node(S_LCDDIM, pid);
 	del_node(S_LCDDIM, tmp);
@@ -452,7 +593,7 @@ static Eina_Bool del_off_cond(void *data)
 	char pname[PATH_MAX];
 	pid_t pid = (pid_t)data;
 
-	_I("delete prohibit off condition by timeout\n");
+	_I("delete prohibit off condition by timeout (%d)", pid);
 
 	tmp = find_node(S_LCDOFF, pid);
 	del_node(S_LCDOFF, tmp);
@@ -471,7 +612,11 @@ static Eina_Bool del_sleep_cond(void *data)
 	char pname[PATH_MAX];
 	pid_t pid = (pid_t)data;
 
-	_I("delete prohibit sleep condition by timeout\n");
+	_I("delete prohibit sleep condition by timeout (%d)", pid);
+
+	if (pid == INTERNAL_LOCK_ALPM &&
+	    check_alpm_invalid_state != NULL)
+		check_alpm_invalid_state();
 
 	tmp = find_node(S_SLEEP, pid);
 	del_node(S_SLEEP, tmp);
@@ -482,6 +627,7 @@ static Eina_Bool del_sleep_cond(void *data)
 		states[pm_cur_state].trans(EVENT_TIMEOUT);
 
 	set_process_active(EINA_FALSE, (pid_t)data);
+
 	return EINA_FALSE;
 }
 
@@ -499,14 +645,14 @@ Eina_Bool timeout_handler(void *data)
 	return EINA_FALSE;
 }
 
-inline static void reset_timeout(int timeout)
+void reset_timeout(int timeout)
 {
 	if (timeout_src_id != 0) {
 		ecore_timer_del(timeout_src_id);
 		timeout_src_id = NULL;
 	}
 	if (timeout > 0)
-		timeout_src_id = ecore_timer_add(MSEC_TO_SEC(timeout),
+		timeout_src_id = ecore_timer_add(MSEC_TO_SEC((double)timeout),
 		    (Ecore_Task_Cb)timeout_handler, NULL);
 	else if (timeout == 0)
 		states[pm_cur_state].trans(EVENT_TIMEOUT);
@@ -590,16 +736,27 @@ static void update_display_time(void)
 
 	/* default setting */
 	ret = get_run_timeout(&run_timeout);
-	if (ret < 0 || run_timeout <= 0) {
+	if (ret < 0 || run_timeout < 0) {
 		_E("Can not get run timeout. set default %d ms",
 		    DEFAULT_NORMAL_TIMEOUT);
 		run_timeout = DEFAULT_NORMAL_TIMEOUT;
 	}
+
+	/* for sdk
+	 * if the run_timeout is zero, it regards AlwaysOn state
+	 */
+	if (run_timeout == 0) {
+		trans_table[S_NORMAL][EVENT_TIMEOUT] = S_NORMAL;
+		run_timeout = ALWAYS_ON_TIMEOUT;
+		_I("LCD Always On");
+	} else
+		trans_table[S_NORMAL][EVENT_TIMEOUT] = S_LCDDIM;
+
 	states[S_NORMAL].timeout = run_timeout;
 
 	get_dim_timeout(&val);
 	states[S_LCDDIM].timeout = val;
-	
+
 	_I("Normal: NORMAL timeout is set by %d ms", states[S_NORMAL].timeout);
 	_I("Normal: DIM timeout is set by %d ms", states[S_LCDDIM].timeout);
 }
@@ -610,7 +767,16 @@ static void update_display_locktime(int time)
 	update_display_time();
 }
 
-void lcd_on_direct(void)
+
+void set_dim_state(bool on)
+{
+	_I("dim state is %d", on);
+	update_display_time();
+	states[pm_cur_state].trans(EVENT_INPUT);
+}
+
+
+void lcd_on_direct(enum device_flags flags)
 {
 	int ret, call_state;
 
@@ -627,18 +793,29 @@ void lcd_on_direct(void)
 	gettimeofday(&lcdon_tv, NULL);
 	if (hbm_check_timeout != NULL)
 		hbm_check_timeout();
-	lcd_on_procedure();
+	lcd_on_procedure(LCD_NORMAL, flags);
 	reset_timeout(DD_LCDOFF_INPUT_TIMEOUT);
 #else
 	ret = vconf_get_int(VCONFKEY_CALL_STATE, &call_state);
 	if ((ret >= 0 && call_state != VCONFKEY_CALL_OFF) ||
 	    (get_lock_screen_state() == VCONFKEY_IDLE_LOCK)) {
 		_D("LOCK state, lcd is on directly");
-		lcd_on_procedure();
+		lcd_on_procedure(LCD_NORMAL, flags);
 	}
 	reset_timeout(display_conf.lcdoff_timeout);
 #endif
 	update_display_locktime(LOCK_SCREEN_INPUT_TIMEOUT);
+}
+
+static inline bool check_lcd_on(void)
+{
+	if (backlight_ops.get_lcd_power() != PM_LCD_POWER_ON)
+		return true;
+
+	if (alpm_get_state != NULL && alpm_get_state() == true)
+		return true;
+
+	return false;
 }
 
 int custom_lcdon(int timeout)
@@ -648,8 +825,8 @@ int custom_lcdon(int timeout)
 	if (timeout <= 0)
 		return -EINVAL;
 
-	if (backlight_ops.get_lcd_power() != PM_LCD_POWER_ON)
-		lcd_on_direct();
+	if (check_lcd_on() == true)
+		lcd_on_direct(LCD_ON_BY_GESTURE);
 
 	_I("custom lcd on %d ms", timeout);
 	if (set_custom_lcdon_timeout(timeout) == true)
@@ -673,6 +850,7 @@ static int proc_change_state(unsigned int cond, pid_t pid)
 	int next_state = 0;
 	struct state *st;
 	int i;
+	char pname[PATH_MAX];
 
 	for (i = S_NORMAL; i < S_END; i++) {
 		if ((cond >> (SHIFT_CHANGE_STATE + i)) & 0x1) {
@@ -680,11 +858,14 @@ static int proc_change_state(unsigned int cond, pid_t pid)
 			break;
 		}
 	}
+
+	get_pname(pid, pname);
+
 	_I("Change State to %s (%d)", state_string[next_state], pid);
 
 	if (next_state == S_NORMAL) {
-		if (backlight_ops.get_lcd_power() != PM_LCD_POWER_ON)
-			lcd_on_direct();
+		if (check_lcd_on() == true)
+			lcd_on_direct(LCD_ON_BY_EVENT);
 	} else if (next_state == S_LCDOFF) {
 		if (backlight_ops.get_lcd_power() != PM_LCD_POWER_OFF)
 			lcd_off_procedure();
@@ -743,14 +924,22 @@ static int proc_change_state(unsigned int cond, pid_t pid)
 
 static int standby_action(int timeout)
 {
-	if (backlight_ops.standby() < 0) {
+	const struct device_ops *ops = NULL;
+
+	if (backlight_ops.standby(false) < 0) {
 		_E("Fail to start standby mode!");
 		return -EIO;
 	}
 	if (CHECK_OPS(keyfilter_ops, backlight_enable))
 		keyfilter_ops->backlight_enable(false);
-	touch_ops.key_off();
-	touch_ops.screen_off();
+
+	ops = find_device("touchkey");
+	if (!check_default(ops))
+		ops->stop(NORMAL_MODE);
+
+	ops = find_device("touchscreen");
+	if (!check_default(ops))
+		ops->stop(NORMAL_MODE);
 
 	set_standby_state(true);
 
@@ -969,6 +1158,9 @@ static int proc_condition(PMMsg *data)
 		_SD("[%s] unlocked by pid %d - process %s\n", "S_LCDOFF",
 			pid, pname);
 		set_unlock_time(pname, S_LCDOFF);
+
+		if (check_suspend_direct != NULL && check_suspend_direct(pid))
+			return 0;
 	}
 	val = val >> 8;
 	if (val != 0) {
@@ -1315,20 +1507,6 @@ int check_lcdoff_direct(void)
 {
 	int ret, lock, cradle;
 
-	if (standby_mode)
-		return false;
-
-	lock = get_lock_screen_state();
-	if (lock != VCONFKEY_IDLE_LOCK && hallic_open)
-		return false;
-
-	if (hdmi_state)
-		return false;
-
-	ret = vconf_get_int(VCONFKEY_SYSMAN_CRADLE_STATUS, &cradle);
-	if (ret >= 0 && cradle == DOCK_SOUND)
-		return false;
-
 	if (pm_old_state != S_NORMAL)
 		return false;
 
@@ -1341,6 +1519,29 @@ int check_lcdoff_direct(void)
 	 */
 	if ((pm_status_flag & DIMSTAY_FLAG) &&
 	    (check_abnormal_popup() == HEALTH_BAD))
+		return false;
+
+	/*
+	 * LCD on -> off directly in ambient mode
+	 */
+	if (get_ambient_mode != NULL &&
+	    get_ambient_mode() == true &&
+	    check_lock_state(S_LCDOFF) == false) {
+		return true;
+	}
+
+	if (standby_mode)
+		return false;
+
+	lock = get_lock_screen_state();
+	if (lock != VCONFKEY_IDLE_LOCK && hallic_open)
+		return false;
+
+	if (hdmi_state)
+		return false;
+
+	ret = vconf_get_int(VCONFKEY_SYSMAN_CRADLE_STATUS, &cradle);
+	if (ret >= 0 && cradle == DOCK_SOUND)
 		return false;
 
 	_D("Goto LCDOFF direct(%d,%d,%d)", lock, hdmi_state, cradle);
@@ -1431,12 +1632,9 @@ static Eina_Bool lcd_on_expired(void *data)
 	if (ret > 0 && lock_state == VCONFKEY_IDLE_LOCK)
 		return EINA_FALSE;
 
-	if (backlight_ops.get_lcd_power() == PM_LCD_POWER_ON)
-		return EINA_FALSE;
-
 	/* lock screen is not launched yet, but lcd is on */
-	if (backlight_ops.get_lcd_power() != PM_LCD_POWER_ON)
-		lcd_on_procedure();
+	if (check_lcd_on() == true)
+		lcd_on_procedure(LCD_NORMAL, NORMAL_MODE);
 
 	return EINA_FALSE;
 }
@@ -1479,8 +1677,8 @@ static void check_lock_screen(void)
 	return;
 
 lcd_on:
-	if (backlight_ops.get_lcd_power() != PM_LCD_POWER_ON)
-		lcd_on_procedure();
+	if (check_lcd_on() == true)
+		lcd_on_procedure(LCD_NORMAL, NORMAL_MODE);
 }
 
 /* default enter action function */
@@ -1526,7 +1724,9 @@ static int default_action(int timeout)
 	if (pm_cur_state != pm_old_state && pm_cur_state != S_SLEEP) {
 		if (power_ops.get_power_lock_support())
 			power_ops.power_lock();
-		if (pm_cur_state != S_LCDOFF)
+		if (pm_cur_state != S_LCDOFF &&
+		    (get_ambient_mode == NULL ||
+		    get_ambient_mode() == false))
 			set_setting_pmstate(pm_cur_state);
 		device_notify(DEVICE_NOTIFIER_LCD, (void *)pm_cur_state);
 	}
@@ -1552,6 +1752,9 @@ static int default_action(int timeout)
 			check_lock_screen();
 		} else if (pm_old_state == S_LCDDIM)
 			backlight_ops.update();
+
+		if (check_lcd_on() == true)
+			lcd_on_procedure(LCD_NORMAL, NORMAL_MODE);
 		set_standby_state(false);
 		break;
 
@@ -1561,12 +1764,9 @@ static int default_action(int timeout)
 			backlight_ops.save_custom_brightness();
 		/* lcd dim state : dim the brightness */
 		backlight_ops.dim();
-		if (pm_old_state == S_LCDOFF || pm_old_state == S_SLEEP) {
-			broadcast_lcd_on();
-			backlight_ops.on();
-			touch_ops.screen_on();
-			touch_ops.key_on();
-		}
+
+		if (pm_old_state == S_LCDOFF || pm_old_state == S_SLEEP)
+			lcd_on_procedure(LCD_DIM, NORMAL_MODE);
 		set_standby_state(false);
 		break;
 
@@ -1576,7 +1776,10 @@ static int default_action(int timeout)
 			/* lcd off state : turn off the backlight */
 			if (backlight_ops.get_lcd_power() != PM_LCD_POWER_OFF)
 				lcd_off_procedure();
-			set_setting_pmstate(pm_cur_state);
+
+			if (get_ambient_mode == NULL ||
+			    get_ambient_mode() == false)
+				set_setting_pmstate(pm_cur_state);
 
 			if (pre_suspend_flag == false) {
 				pre_suspend_flag = true;
@@ -1584,7 +1787,8 @@ static int default_action(int timeout)
 			}
 		}
 
-		if (backlight_ops.get_lcd_power() != PM_LCD_POWER_OFF)
+		if (backlight_ops.get_lcd_power() != PM_LCD_POWER_OFF
+		    || lcd_paneloff_mode)
 			lcd_off_procedure();
 		break;
 
@@ -1723,7 +1927,9 @@ static int poll_callback(int condition, PMMsg *data)
 		if (pm_cur_state == S_LCDOFF || pm_cur_state == S_SLEEP)
 			_I("Power key input");
 		time(&now);
-		if (last_t != now) {
+		if (last_t != now ||
+		    pm_cur_state == S_LCDOFF ||
+		    pm_cur_state == S_SLEEP) {
 			states[pm_cur_state].trans(EVENT_INPUT);
 			last_t = now;
 		}
@@ -1745,18 +1951,10 @@ static int update_setting(int key_idx, int val)
 	char buf[PATH_MAX];
 	int ret = -1;
 	int run_timeout = -1;
-	int power_saving_stat = -1;
-	int power_saving_display_stat = -1;
 
 	switch (key_idx) {
 	case SETTING_TO_NORMAL:
-		ret = get_run_timeout(&run_timeout);
-		if (ret < 0 || run_timeout <= 0) {
-			_E("Can not get run timeout. set default %.2f ms",
-			    DEFAULT_NORMAL_TIMEOUT);
-			run_timeout = DEFAULT_NORMAL_TIMEOUT;
-		}
-		states[S_NORMAL].timeout = run_timeout;
+		update_display_time();
 		states[pm_cur_state].trans(EVENT_INPUT);
 		break;
 	case SETTING_HALLIC_OPEN:
@@ -1824,7 +2022,7 @@ static int update_setting(int key_idx, int val)
 		if (pm_cur_state == S_NORMAL &&
 		    val == VCONFKEY_IDLE_LOCK &&
 		    backlight_ops.get_lcd_power() != PM_LCD_POWER_ON)
-			lcd_on_procedure();
+			lcd_on_procedure(LCD_NORMAL, LCD_ON_BY_EVENT);
 		stop_lock_timer();
 		update_display_time();
 		if (pm_cur_state == S_NORMAL) {
@@ -1836,33 +2034,6 @@ static int update_setting(int key_idx, int val)
 		update_display_time();
 		if (pm_cur_state == S_NORMAL) {
 			states[pm_cur_state].trans(EVENT_INPUT);
-		}
-		break;
-	case SETTING_POWER_SAVING:
-		if (val == 1)
-			vconf_get_bool(VCONFKEY_SETAPPL_PWRSV_CUSTMODE_DISPLAY,
-				 &power_saving_display_stat);
-		if (power_saving_display_stat != 1)
-			power_saving_display_stat = 0;
-		if (device_set_property(DEVICE_TYPE_DISPLAY, PROP_DISPLAY_FRAME_RATE,
-		    power_saving_display_stat) < 0) {
-			_E("Fail to set display frame rate!");
-		}
-		backlight_ops.update();
-		break;
-	case SETTING_POWER_SAVING_DISPLAY:
-		vconf_get_bool(VCONFKEY_SETAPPL_PWRSV_SYSMODE_STATUS,
-			&power_saving_stat);
-		if (power_saving_stat == 1) {
-			if (val == 1)
-				power_saving_display_stat = 1;
-			else
-				power_saving_display_stat = 0;
-			if (device_set_property(DEVICE_TYPE_DISPLAY,
-			    PROP_DISPLAY_FRAME_RATE, power_saving_display_stat) < 0) {
-				_E("Fail to set display frame rate!");
-			}
-			backlight_ops.update();
 		}
 		break;
 	case SETTING_SMART_STAY:
@@ -1922,8 +2093,6 @@ static void check_seed_status(void)
 	int max_brt = 0;
 	int brt = 0;
 	int lock_state = -1;
-	int power_saving_stat = -1;
-	int power_saving_display_stat = -1;
 	int smart_stay_on = 0;
 
 	/* Charging check */
@@ -1949,10 +2118,7 @@ static void check_seed_status(void)
 			pm_status_flag |= LOWBT_FLAG;
 		}
 	}
-	backlight_ops.update();
-	backlight_ops.on();
-	touch_ops.screen_on();
-	touch_ops.key_on();
+	lcd_on_procedure(LCD_NORMAL, LCD_ON_BY_EVENT);
 
 	/* lock screen check */
 	ret = vconf_get_int(VCONFKEY_IDLE_LOCK_STATE, &lock_state);
@@ -1961,22 +2127,6 @@ static void check_seed_status(void)
 		states[S_NORMAL].timeout = lock_screen_timeout;
 		_I("LCD NORMAL timeout is set by %d ms"
 			" for lock screen", lock_screen_timeout);
-	}
-
-	/* power saving display stat */
-	vconf_get_bool(VCONFKEY_SETAPPL_PWRSV_SYSMODE_STATUS,
-	    &power_saving_stat);
-	if (power_saving_stat <= 0) {
-		power_saving_display_stat = 0;
-	} else {
-		vconf_get_bool(VCONFKEY_SETAPPL_PWRSV_CUSTMODE_DISPLAY,
-		    &power_saving_display_stat);
-	}
-	if (power_saving_display_stat < 0) {
-		_E("failed to read power saving display stat!");
-	} else {
-		_I("power saving display stat : %d",
-		    power_saving_display_stat);
 	}
 
 	/* Smart stay status */
@@ -1997,6 +2147,33 @@ static void check_seed_status(void)
 	return;
 }
 
+static void init_lcd_operation(void)
+{
+	const struct device_ops *ops = NULL;
+
+	ops = find_device("display");
+	if (!check_default(ops))
+		EINA_LIST_APPEND(lcdon_ops, ops);
+
+	ops = find_device("touchscreen");
+	if (!check_default(ops))
+		EINA_LIST_APPEND(lcdon_ops, ops);
+
+	ops = find_device("touchkey");
+	if (!check_default(ops))
+		EINA_LIST_APPEND(lcdon_ops, ops);
+}
+
+static void exit_lcd_operation(void)
+{
+	Eina_List *l = NULL;
+	Eina_List *l_next = NULL;
+	const struct device_ops *ops = NULL;
+
+	EINA_LIST_FOREACH_SAFE(lcdon_ops, l, l_next, ops)
+		EINA_LIST_REMOVE_LIST(lcdon_ops, l);
+}
+
 enum {
 	INIT_SETTING = 0,
 	INIT_INTERFACE,
@@ -2014,21 +2191,38 @@ static const char *errMSG[INIT_END] = {
 	[INIT_DBUS] = "d-bus init error",
 };
 
+static void esd_action()
+{
+	_I("ESD on");
+
+	if (pm_cur_state == S_NORMAL) {
+		backlight_ops.off(NORMAL_MODE);
+		backlight_ops.on(NORMAL_MODE);
+	} else if (pm_cur_state == S_LCDDIM) {
+		backlight_ops.off(NORMAL_MODE);
+		backlight_ops.dim();
+	} else if (alpm_get_state != NULL &&
+	    alpm_get_state() == true) {
+		proc_change_state(S_NORMAL <<
+		    (SHIFT_CHANGE_STATE + S_NORMAL), getpid());
+		backlight_ops.off(NORMAL_MODE);
+		backlight_ops.on(NORMAL_MODE);
+	}
+}
+
 static int input_action(char* input_act, char* input_path)
 {
-	int ret = -EINVAL;
-	Eina_List *list_node = NULL;
+	int ret = 0;
 	Eina_List *l = NULL;
 	Eina_List *l_next = NULL;
 	indev *data = NULL;
-	PmLockNode *tmp = NULL;
 
 	if (!strcmp("add", input_act)) {
 		_I("add input path : %s", input_path);
 		ret = init_pm_poll_input(poll_callback, input_path);
 	} else if (!strcmp("remove", input_act)) {
 		EINA_LIST_FOREACH_SAFE(indev_list, l, l_next, data)
-			if(!strcmp(input_path, data->dev_path)) {
+			if (!strcmp(input_path, data->dev_path)) {
 				_I("remove %s", input_path);
 				ecore_main_fd_handler_del(data->dev_fd);
 				close(data->fd);
@@ -2036,19 +2230,11 @@ static int input_action(char* input_act, char* input_path)
 				free(data);
 				indev_list = eina_list_remove_list(indev_list, l);
 			}
-		ret = 0;
 	} else if (!strcmp("change", input_act)) {
-		if (!strcmp("ESD", input_path)) {
-			_I("ESD on");
-			if (pm_cur_state == S_NORMAL) {
-				backlight_ops.off();
-				backlight_ops.on();
-			} else if (pm_cur_state == S_LCDDIM) {
-				backlight_ops.off();
-				backlight_ops.dim();
-			}
-			ret = 0;
-		}
+		if (!strcmp("ESD", input_path))
+			esd_action();
+	} else {
+		ret = -EINVAL;
 	}
 	return ret;
 }
@@ -2068,6 +2254,8 @@ int set_lcd_timeout(int on, int dim, int holdkey_block, char *name)
 	}
 	/* Apply new backlight time */
 	update_display_time();
+	if (pm_cur_state == S_NORMAL)
+		states[pm_cur_state].trans(EVENT_INPUT);
 
 	if (holdkey_block) {
 		custom_holdkey_block = true;
@@ -2141,6 +2329,9 @@ static int hall_ic_open(void *data)
 	int open = (int)data;
 
 	update_pm_setting(SETTING_HALLIC_OPEN, open);
+
+	if (display_info.update_auto_brightness)
+		display_info.update_auto_brightness(false);
 
 	return 0;
 }
@@ -2221,7 +2412,7 @@ static int display_load_config(struct parse_result *result, void *user_data)
 		return -EINVAL;
 
 	if (!MATCH(result->section, "Display"))
-		return -EINVAL;
+		return 0;
 
 	if (MATCH(result->name, "LockScreenWaitingTime")) {
 		SET_CONF(c->lock_wait_time, atof(result->value));
@@ -2262,6 +2453,12 @@ static int display_load_config(struct parse_result *result, void *user_data)
 	} else if (MATCH(result->name, "UseALPM")) {
 		c->alpm_on = (MATCH(result->value, "yes") ? 1 : 0);
 		_D("UseALPM is %d", c->alpm_on);
+	} else if (MATCH(result->name, "AccelSensorOn")) {
+		c->accel_sensor_on = (MATCH(result->value, "yes") ? 1 : 0);
+		_D("AccelSensorOn is %d", c->accel_sensor_on);
+	} else if (MATCH(result->name, "ContinuousSampling")) {
+		c->continuous_sampling = (MATCH(result->value, "yes") ? 1 : 0);
+		_D("ContinuousSampling is %d", c->continuous_sampling);
 	}
 
 	return 0;
@@ -2328,6 +2525,7 @@ static void display_init(void *data)
 #ifdef ENABLE_PM_LOG
 		pm_history_init();
 #endif
+		init_lcd_operation();
 		check_seed_status();
 
 		if (display_conf.lcd_always_on) {
@@ -2346,7 +2544,7 @@ static void display_init(void *data)
 				timeout = DEFAULT_NORMAL_TIMEOUT;
 
 			reset_timeout(timeout);
-
+			status = DEVICE_OPS_STATUS_START;
 			/*
 			 * Lock lcd off until booting is done.
 			 * deviced guarantees all booting script is executing.
@@ -2358,7 +2556,6 @@ static void display_init(void *data)
 		if (CHECK_OPS(keyfilter_ops, init))
 			keyfilter_ops->init();
 	}
-	status = DEVICE_OPS_STATUS_START;
 }
 
 static void display_exit(void *data)
@@ -2371,7 +2568,7 @@ static void display_exit(void *data)
 	pm_cur_state = S_NORMAL;
 	set_setting_pmstate(pm_cur_state);
 	/* timeout is not needed */
-	reset_timeout(0);
+	reset_timeout(TIMEOUT_NONE);
 
 	if (CHECK_OPS(keyfilter_ops, exit))
 		keyfilter_ops->exit();
@@ -2403,13 +2600,30 @@ static void display_exit(void *data)
 			break;
 		}
 	}
+
+	exit_lcd_operation();
 	free_lock_info_list();
 
 	_I("Stop power manager");
 }
 
-static int display_start(void)
+static int display_start(enum device_flags flags)
 {
+	/* NORMAL MODE */
+	if (flags & NORMAL_MODE) {
+		if (flags & LCD_PANEL_OFF_MODE)
+			/* standby on */
+			backlight_ops.standby(true);
+		else
+			/* normal lcd on */
+			backlight_ops.on(flags);
+		return 0;
+	}
+
+	/* CORE LOGIC MODE */
+	if (!(flags & CORE_LOGIC_MODE))
+		return 0;
+
 	if (status == DEVICE_OPS_STATUS_START)
 		return -EALREADY;
 
@@ -2418,8 +2632,18 @@ static int display_start(void)
 	return 0;
 }
 
-static int display_stop(void)
+static int display_stop(enum device_flags flags)
 {
+	/* NORMAL MODE */
+	if (flags & NORMAL_MODE) {
+		backlight_ops.off(flags);
+		return 0;
+	}
+
+	/* CORE LOGIC MODE */
+	if (!(flags & CORE_LOGIC_MODE))
+		return 0;
+
 	if (status == DEVICE_OPS_STATUS_STOP)
 		return -EALREADY;
 

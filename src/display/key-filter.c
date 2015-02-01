@@ -30,12 +30,13 @@
 #include "poll.h"
 #include "brightness.h"
 #include "device-node.h"
-#include "core/queue.h"
+#include "display-actor.h"
 #include "core/common.h"
-#include "core/data.h"
+#include "core/devices.h"
 #include "core/device-notifier.h"
 #include "core/edbus-handler.h"
 #include "core/device-handler.h"
+#include "power/power-handler.h"
 
 #include <linux/input.h>
 #ifndef KEY_SCREENLOCK
@@ -67,6 +68,8 @@
 #define KEY_COMBINATION_SCREENCAPTURE	2
 
 #define SIGNAL_CHANGE_HARDKEY		"ChangeHardkey"
+#define SIGNAL_LCDON_BY_POWERKEY	"LCDOnByPowerkey"
+#define SIGNAL_LCDOFF_BY_POWERKEY	"LCDOffByPowerkey"
 
 #define NORMAL_POWER(val)		(val == 0)
 #define KEY_TEST_MODE_POWER(val)	(val == 2)
@@ -88,7 +91,7 @@ static Ecore_Timer *combination_timeout_id = NULL;
 static Ecore_Timer *hardkey_timeout_id = NULL;
 static int cancel_lcdoff;
 static int key_combination = KEY_COMBINATION_STOP;
-static int volumedown_pressed = false;
+static int menu_pressed = false;
 static int hardkey_duration;
 static bool touch_pressed = false;
 static int skip_lcd_off = false;
@@ -106,21 +109,40 @@ static inline void restore_custom_brightness(void)
 		backlight_ops.custom_update();
 }
 
+static int power_execute(void *data)
+{
+	static const struct device_ops *ops = NULL;
+
+	FIND_DEVICE_INT(ops, POWER_OPS_NAME);
+
+	return ops->execute(data);
+}
+
 static void longkey_pressed()
 {
 	int val = 0;
 	int ret;
 	int csc_mode;
 	char *opt;
+	unsigned int caps;
+
 	_I("Power key long pressed!");
 	cancel_lcdoff = 1;
 
-	/* change state - LCD on */
-	recv_data.pid = -1;
-	recv_data.cond = 0x100;
-	(*g_pm_callback)(PM_CONTROL_EVENT, &recv_data);
+	caps = display_get_caps(DISPLAY_ACTOR_POWER_KEY);
 
-	(*g_pm_callback) (INPUT_POLL_EVENT, NULL);
+	if (display_has_caps(caps, DISPLAY_CAPA_LCDON)) {
+		/* change state - LCD on */
+		recv_data.pid = getpid();
+		recv_data.cond = 0x100;
+		(*g_pm_callback)(PM_CONTROL_EVENT, &recv_data);
+		(*g_pm_callback)(INPUT_POLL_EVENT, NULL);
+	}
+
+	if (!display_has_caps(caps, DISPLAY_CAPA_LCDOFF)) {
+		_D("No poweroff capability!");
+		return;
+	}
 
 	ret = vconf_get_int(VCONFKEY_TESTMODE_POWER_OFF_POPUP, &val);
 	if (ret != 0 || NORMAL_POWER(val)) {
@@ -139,7 +161,7 @@ static void longkey_pressed()
 	}
 	opt = POWEROFF_ACT;
 entry_call:
-	notify_action(opt, 0);
+	power_execute(opt);
 }
 
 static Eina_Bool longkey_pressed_cb(void *data)
@@ -185,6 +207,18 @@ static inline void check_key_pair(int code, int new, int *old)
 		*old = new;
 }
 
+static inline void broadcast_lcdon_by_powerkey(void)
+{
+	broadcast_edbus_signal(DEVICED_PATH_DISPLAY, DEVICED_INTERFACE_DISPLAY,
+	    SIGNAL_LCDON_BY_POWERKEY, NULL, NULL);
+}
+
+static inline void broadcast_lcdoff_by_powerkey(void)
+{
+	broadcast_edbus_signal(DEVICED_PATH_DISPLAY, DEVICED_INTERFACE_DISPLAY,
+	    SIGNAL_LCDOFF_BY_POWERKEY, NULL, NULL);
+}
+
 static inline bool switch_on_lcd(void)
 {
 	if (current_state_in_on())
@@ -193,7 +227,9 @@ static inline bool switch_on_lcd(void)
 	if (backlight_ops.get_lcd_power() == PM_LCD_POWER_ON)
 		return false;
 
-	lcd_on_direct();
+	broadcast_lcdon_by_powerkey();
+
+	lcd_on_direct(LCD_ON_BY_POWER_KEY);
 
 	return true;
 }
@@ -206,15 +242,59 @@ static inline void switch_off_lcd(void)
 	if (backlight_ops.get_lcd_power() == PM_LCD_POWER_OFF)
 		return;
 
+	broadcast_lcdoff_by_powerkey();
+
 	lcd_off_procedure();
 }
 
+static void process_combination_key(struct input_event *pinput)
+{
+	if (pinput->value == KEY_PRESSED) {
+		if (key_combination == KEY_COMBINATION_STOP) {
+			key_combination = KEY_COMBINATION_START;
+			combination_timeout_id = ecore_timer_add(
+			    COMBINATION_INTERVAL,
+			    (Ecore_Task_Cb)combination_failed_cb, NULL);
+		} else if (key_combination == KEY_COMBINATION_START) {
+			if (combination_timeout_id > 0) {
+				ecore_timer_del(combination_timeout_id);
+				combination_timeout_id = NULL;
+			}
+			if (longkey_timeout_id > 0) {
+				ecore_timer_del(longkey_timeout_id);
+				longkey_timeout_id = NULL;
+			}
+			_I("capture mode");
+			key_combination = KEY_COMBINATION_SCREENCAPTURE;
+			skip_lcd_off = true;
+		}
+		menu_pressed = true;
+	} else if (pinput->value == KEY_RELEASED) {
+		if (key_combination != KEY_COMBINATION_SCREENCAPTURE)
+			stop_key_combination();
+		menu_pressed = false;
+	}
+}
+
+
 static int process_menu_key(struct input_event *pinput)
 {
-	if (pinput->value == KEY_PRESSED)
-		switch_on_lcd();
+	int caps;
 
-	stop_key_combination();
+	caps = display_get_caps(DISPLAY_ACTOR_MENU_KEY);
+
+	if (!display_has_caps(caps, DISPLAY_CAPA_LCDON)) {
+		if (current_state_in_on()) {
+			process_combination_key(pinput);
+			return false;
+		}
+		_D("No lcd-on capability!");
+		return true;
+	} else if (pinput->value == KEY_PRESSED) {
+		switch_on_lcd();
+	}
+
+	process_combination_key(pinput);
 
 	return false;
 }
@@ -243,7 +323,7 @@ static int decide_lcdoff(void)
 		return false;
 
 	/* LCD-off is blocked at the moment volumedown key is pressed */
-	if (volumedown_pressed)
+	if (menu_pressed)
 		return false;
 
 	/* LCD-off is blocked when powerkey and volmedown key are pressed */
@@ -269,7 +349,7 @@ static int lcdoff_powerkey(void)
 			delete_condition(S_LCDOFF);
 			delete_condition(S_LCDDIM);
 			update_lcdoff_source(VCONFKEY_PM_LCDOFF_BY_POWERKEY);
-			recv_data.pid = -1;
+			recv_data.pid = getpid();
 			recv_data.cond = 0x400;
 			(*g_pm_callback)(PM_CONTROL_EVENT, &recv_data);
 		}
@@ -285,6 +365,9 @@ static int process_power_key(struct input_event *pinput)
 {
 	int ignore = true;
 	static int value = KEY_RELEASED;
+	unsigned int caps;
+
+	caps = display_get_caps(DISPLAY_ACTOR_POWER_KEY);
 
 	switch (pinput->value) {
 	case KEY_RELEASED:
@@ -292,10 +375,16 @@ static int process_power_key(struct input_event *pinput)
 		check_key_pair(pinput->code, pinput->value, &value);
 
 		if (!display_conf.powerkey_doublepress) {
-			ignore = lcdoff_powerkey();
+			if (display_has_caps(caps, DISPLAY_CAPA_LCDOFF))
+				ignore = lcdoff_powerkey();
+			else
+				_D("No lcdoff capability!");
 		} else if (skip_lcd_off) {
 			ignore = false;
 		}
+
+		if (!display_has_caps(caps, DISPLAY_CAPA_LCDON))
+			ignore = true;
 
 		stop_key_combination();
 		if (longkey_timeout_id > 0) {
@@ -306,7 +395,12 @@ static int process_power_key(struct input_event *pinput)
 		break;
 	case KEY_PRESSED:
 		powerkey_pressed = true;
-		skip_lcd_off = switch_on_lcd();
+		if (display_has_caps(caps, DISPLAY_CAPA_LCDON)) {
+			skip_lcd_off = switch_on_lcd();
+		} else {
+			_D("No lcdon capability!");
+			skip_lcd_off = false;
+		}
 		check_key_pair(pinput->code, pinput->value, &value);
 		_I("power key pressed");
 		pressed_time.tv_sec = (pinput->time).tv_sec;
@@ -341,43 +435,6 @@ static int process_power_key(struct input_event *pinput)
 			longkey_pressed();
 		break;
 	}
-	return ignore;
-}
-
-static int process_volumedown_key(struct input_event *pinput)
-{
-	int ignore = true;
-
-	if (pinput->value == KEY_PRESSED) {
-		if (key_combination == KEY_COMBINATION_STOP) {
-			key_combination = KEY_COMBINATION_START;
-			combination_timeout_id = ecore_timer_add(
-				    COMBINATION_INTERVAL,
-				    (Ecore_Task_Cb)combination_failed_cb, NULL);
-		} else if (key_combination == KEY_COMBINATION_START) {
-			if (combination_timeout_id > 0) {
-				ecore_timer_del(combination_timeout_id);
-				combination_timeout_id = NULL;
-			}
-			if (longkey_timeout_id > 0) {
-				ecore_timer_del(longkey_timeout_id);
-				longkey_timeout_id = NULL;
-			}
-			_I("capture mode");
-			key_combination = KEY_COMBINATION_SCREENCAPTURE;
-			skip_lcd_off = true;
-			ignore = false;
-		}
-		volumedown_pressed = true;
-	} else if (pinput->value == KEY_RELEASED) {
-		if (key_combination != KEY_COMBINATION_SCREENCAPTURE) {
-			stop_key_combination();
-			if (current_state_in_on())
-				ignore = false;
-		}
-		volumedown_pressed = false;
-	}
-
 	return ignore;
 }
 
@@ -534,9 +591,6 @@ static int check_key(struct input_event *pinput, int fd)
 	case KEY_POWER:
 		ignore = process_power_key(pinput);
 		break;
-	case KEY_VOLUMEDOWN:
-		ignore = process_volumedown_key(pinput);
-		break;
 	case KEY_BRIGHTNESSDOWN:
 		ignore = process_brightness_key(pinput, BRIGHTNESS_DOWN);
 		break;
@@ -557,6 +611,7 @@ static int check_key(struct input_event *pinput, int fd)
 		}
 		break;
 	case KEY_VOLUMEUP:
+	case KEY_VOLUMEDOWN:
 	case KEY_CAMERA:
 	case KEY_EXIT:
 	case KEY_CONFIG:
@@ -593,31 +648,6 @@ static int check_key(struct input_event *pinput, int fd)
 	return ignore;
 }
 
-static inline int check_powerkey_delay(struct input_event *pinput)
-{
-	struct timespec tp;
-	int delay;
-
-	if (pinput->code != KEY_POWER ||
-	    pinput->value != KEY_PRESSED)
-		return false;
-
-	if (backlight_ops.get_lcd_power() != PM_LCD_POWER_ON)
-		return false;
-
-	clock_gettime(CLOCK_MONOTONIC, &tp);
-
-	delay = SEC_TO_MSEC(tp.tv_sec) +
-	    NSEC_TO_MSEC(tp.tv_nsec) -
-	    (SEC_TO_MSEC((pinput->time).tv_sec) +
-	    USEC_TO_MSEC((pinput->time).tv_usec));
-
-	if (delay < KEY_MAX_DELAY_TIME)
-		return false;
-
-	return true;
-}
-
 static int check_key_filter(int length, char buf[], int fd)
 {
 	struct input_event *pinput;
@@ -632,14 +662,6 @@ static int check_key_filter(int length, char buf[], int fd)
 			if (pinput->code == BTN_TOUCH &&
 			    pinput->value == KEY_RELEASED)
 				touch_pressed = false;
-			/*
-			 * The later inputs are going to be ignored when
-			 * powerkey is pressed several times for a short time
-			 */
-			if (check_powerkey_delay(pinput) == true) {
-				_D("power key is delayed, then ignored!");
-				return 0;
-			}
 			/*
 			 * Normally, touch press/release events don't occur
 			 * in lcd off state. But touch release events can occur
@@ -790,8 +812,28 @@ static int hardkey_lcd_changed_cb(void *data)
 	return 0;
 }
 
+/*
+ * Default capability
+ * powerkey := LCDON | LCDOFF | POWEROFF
+ * homekey  := LCDON
+ */
+static struct display_actor_ops display_powerkey_actor = {
+	.id	= DISPLAY_ACTOR_POWER_KEY,
+	.caps	= DISPLAY_CAPA_LCDON |
+		  DISPLAY_CAPA_LCDOFF |
+		  DISPLAY_CAPA_POWEROFF,
+};
+
+static struct display_actor_ops display_menukey_actor = {
+	.id	= DISPLAY_ACTOR_MENU_KEY,
+	.caps	= DISPLAY_CAPA_LCDON,
+};
+
 static void keyfilter_init(void)
 {
+	display_add_actor(&display_powerkey_actor);
+	display_add_actor(&display_menukey_actor);
+
 	/* get touchkey light duration setting */
 	if (vconf_get_int(VCONFKEY_SETAPPL_TOUCHKEY_LIGHT_DURATION, &hardkey_duration) < 0) {
 		_W("Fail to get VCONFKEY_SETAPPL_TOUCHKEY_LIGHT_DURATION!!");

@@ -28,14 +28,15 @@
 #include "util.h"
 #include "core.h"
 #include "poll.h"
+#include "weaks.h"
 #include "brightness.h"
 #include "device-node.h"
-#include "core/queue.h"
 #include "core/common.h"
-#include "core/data.h"
+#include "core/devices.h"
 #include "core/device-notifier.h"
 #include "core/edbus-handler.h"
 #include "core/device-handler.h"
+#include "power/power-handler.h"
 
 #include <linux/input.h>
 
@@ -57,6 +58,15 @@ static inline int current_state_in_on(void)
 	return (pm_cur_state == S_LCDDIM || pm_cur_state == S_NORMAL);
 }
 
+static int power_execute(void *data)
+{
+	static const struct device_ops *ops = NULL;
+
+	FIND_DEVICE_INT(ops, POWER_OPS_NAME);
+
+	return ops->execute(data);
+}
+
 static void longkey_pressed()
 {
 	int val, ret;
@@ -76,7 +86,8 @@ static void longkey_pressed()
 	 * when power-off popup is disabled for testmode.
 	 */
 	_I("power off action!");
-	notify_action(POWEROFF_ACT, 0);
+
+	power_execute(POWEROFF_ACT);
 }
 
 static Eina_Bool longkey_pressed_cb(void *data)
@@ -107,11 +118,13 @@ static inline bool switch_on_lcd(void)
 		return false;
 
 	if (backlight_ops.get_lcd_power() == PM_LCD_POWER_ON)
-		return false;
+		if (alpm_get_state == NULL ||
+		    alpm_get_state() == false)
+			return false;
 
 	broadcast_lcdon_by_powerkey();
 
-	lcd_on_direct();
+	lcd_on_direct(LCD_ON_BY_POWER_KEY);
 
 	return true;
 }
@@ -225,7 +238,8 @@ static int check_key_filter(int length, char buf[], int fd)
 		case EV_ABS:
 			if (current_state_in_on())
 				ignore = false;
-			else if (display_conf.alpm_on == true) {
+			if (get_ambient_mode != NULL &&
+			    get_ambient_mode() == true) {
 				switch_on_lcd();
 				ignore = false;
 			}
@@ -262,11 +276,14 @@ static int powerkey_lcdoff(void)
 	}
 
 	_I("power key lcdoff");
+
+	if (display_info.update_auto_brightness)
+		display_info.update_auto_brightness(false);
 	switch_off_lcd();
 	delete_condition(S_LCDOFF);
 	delete_condition(S_LCDDIM);
 	update_lcdoff_source(VCONFKEY_PM_LCDOFF_BY_POWERKEY);
-	recv_data.pid = -1;
+	recv_data.pid = getpid();
 	recv_data.cond = 0x400;
 	(*g_pm_callback)(PM_CONTROL_EVENT, &recv_data);
 

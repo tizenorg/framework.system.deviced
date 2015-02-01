@@ -69,7 +69,7 @@ void touch_boost_enable(struct touch_control *touch_control,
 /* Define global variable of struct touch_control */
 static struct touch_control touch_control;
 
-static int touch_stop(void)
+static int touch_stop(enum device_flags flags)
 {
 	/* Restore touch boost state as ON state */
 	set_cpufreq_touch_boost_off(TOUCH_BOOST_ON);
@@ -81,7 +81,7 @@ static int touch_stop(void)
 	return 0;
 }
 
-static int touch_start(void)
+static int touch_start(enum device_flags flags)
 {
 	int i;
 

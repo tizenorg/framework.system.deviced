@@ -23,18 +23,19 @@
 
 #include "core/list.h"
 #include "core/log.h"
-#include "core/data.h"
 #include "core/devices.h"
 #include "core/edbus-handler.h"
 #include "core/common.h"
 #include "core/device-notifier.h"
 #include "proc/proc-handler.h"
 
-#define PREDEF_SET_MAX_FREQUENCY	"set_max_frequency"
-#define PREDEF_SET_MIN_FREQUENCY	"set_min_frequency"
-#define PREDEF_RELEASE_MAX_FREQUENCY	"release_max_frequency"
-#define PREDEF_RELEASE_MIN_FREQUENCY	"release_min_frequency"
-#define PREDEF_CPU_COUNT	"set_cpu_count"
+#define SET_MAX_FREQ	"set_max_frequency"
+#define SET_MIN_FREQ	"set_min_frequency"
+#define SET_FREQ_LEN	17
+
+#define RELEASE_MAX_FREQ	"release_max_frequency"
+#define RELEASE_MIN_FREQ	"release_min_frequency"
+#define RELEASE_FREQ_LEN	21
 
 #define POWER_SAVING_CPU_FREQ_RATE	(0.7)
 
@@ -343,13 +344,12 @@ static void set_emergency_limit(void)
 		_E("failed to get vconf key");
 		return;
 	}
-	if (val != SETTING_PSMODE_EMERGENCY)
-		return;
-
-	val = EMERGENCY_LOCK;
-	device_notify(DEVICE_NOTIFIER_PMQOS_EMERGENCY, (void*)val);
-
+	if (val == SETTING_PSMODE_EMERGENCY) {
+		val = EMERGENCY_LOCK;
+		device_notify(DEVICE_NOTIFIER_PMQOS_EMERGENCY, (void*)val);
+	}
 }
+
 static int emergency_cpu_cb(keynode_t *key_nodes, void *data)
 {
 	int val;
@@ -485,44 +485,6 @@ static int add_entry_to_cpu_number_list(int pid, int number)
 	return 0;
 }
 
-int set_cpu_number_action(int argc, char **argv)
-{
-	int r;
-
-	if(cur_siop_level() != 0)
-		return -EINVAL;
-
-	if (argc == 1) {// release cpu number
-		r = remove_entry_from_cpu_number_list(atoi(argv[0]));
-		if (r < 0) {
-			_E("Remove entry failed");
-			return r;
-		}
-
-		if (cur_cpu_number == INT_MAX)
-			cur_cpu_number = cpu_number_limit;
-
-		r = write_cpu_number(cur_cpu_number);
-		if (r < 0) {
-			_E("Write cpu number failed");
-			return r;
-		}
-	} else if (argc ==2) {//set cpu number
-		r = add_entry_to_cpu_number_list(atoi(argv[0]), atoi(argv[1]));
-		if (r < 0) {
-			_E("Add entry failed");
-			return r;
-		}
-
-		r = write_cpu_number(cur_cpu_number);
-		if (r < 0) {
-			_E("Write entry failed");
-			return r;
-		}
-	}
-	return 0;
-}
-
 static int booting_done(void *data)
 {
 	set_freq_limit();
@@ -566,13 +528,13 @@ static DBusMessage *dbus_cpu_handler(E_DBus_Object *obj, DBusMessage *msg)
 		goto out;
 	}
 
-	if (strncmp(type_str, PREDEF_SET_MAX_FREQUENCY, strlen(PREDEF_SET_MAX_FREQUENCY)) == 0)
+	if (!strncmp(type_str, SET_MAX_FREQ, SET_FREQ_LEN))
 		ret = set_max_frequency_action(argc, (char **)&argv);
-	else if (strncmp(type_str, PREDEF_SET_MIN_FREQUENCY, strlen(PREDEF_SET_MIN_FREQUENCY)) == 0)
+	else if (!strncmp(type_str, SET_MIN_FREQ, SET_FREQ_LEN))
 		ret = set_min_frequency_action(argc, (char **)&argv);
-	else if (strncmp(type_str, PREDEF_RELEASE_MAX_FREQUENCY, strlen(PREDEF_RELEASE_MAX_FREQUENCY)) == 0)
+	else if (!strncmp(type_str, RELEASE_MAX_FREQ, RELEASE_FREQ_LEN))
 		ret = release_max_frequency_action(argc, (char **)&argv);
-	else if (strncmp(type_str, PREDEF_RELEASE_MIN_FREQUENCY, strlen(PREDEF_RELEASE_MIN_FREQUENCY)) == 0)
+	else if (!strncmp(type_str, RELEASE_MIN_FREQ, RELEASE_FREQ_LEN))
 		ret = release_min_frequency_action(argc, (char **)&argv);
 out:
 	reply = dbus_message_new_method_return(msg);
@@ -583,10 +545,10 @@ out:
 }
 
 static const struct edbus_method edbus_methods[] = {
-	{ PREDEF_SET_MAX_FREQUENCY,     "siss", "i", dbus_cpu_handler },
-	{ PREDEF_SET_MIN_FREQUENCY,     "siss", "i", dbus_cpu_handler },
-	{ PREDEF_RELEASE_MAX_FREQUENCY, "siss", "i", dbus_cpu_handler },
-	{ PREDEF_RELEASE_MIN_FREQUENCY, "siss", "i", dbus_cpu_handler },
+	{ SET_MAX_FREQ,     "siss", "i", dbus_cpu_handler },
+	{ SET_MIN_FREQ,     "siss", "i", dbus_cpu_handler },
+	{ RELEASE_MAX_FREQ, "siss", "i", dbus_cpu_handler },
+	{ RELEASE_MIN_FREQ, "siss", "i", dbus_cpu_handler },
 };
 
 static void cpu_init(void *data)
@@ -598,11 +560,6 @@ static void cpu_init(void *data)
 	if (ret < 0)
 		_E("fail to init edbus method(%d)", ret);
 	set_cpu_number_limit();
-	register_action(PREDEF_SET_MAX_FREQUENCY, set_max_frequency_action, NULL, NULL);
-	register_action(PREDEF_SET_MIN_FREQUENCY, set_min_frequency_action, NULL, NULL);
-	register_action(PREDEF_RELEASE_MAX_FREQUENCY, release_max_frequency_action, NULL, NULL);
-	register_action(PREDEF_RELEASE_MIN_FREQUENCY, release_min_frequency_action, NULL, NULL);
-	register_action(PREDEF_CPU_COUNT, set_cpu_number_action, NULL, NULL);
 
 	vconf_notify_key_changed(VCONFKEY_SETAPPL_PWRSV_CUSTMODE_CPU, (void *)power_saving_cpu_cb, NULL);
 	vconf_notify_key_changed(VCONFKEY_SETAPPL_PSMODE, (void *)emergency_cpu_cb, NULL);

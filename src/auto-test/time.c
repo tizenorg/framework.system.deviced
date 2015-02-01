@@ -34,18 +34,21 @@ static void time_changed(void *data, DBusMessage *msg)
 {
 	DBusError err;
 	int val;
-	int r;
+	int ret;
 
 	_I("edbus signal Received");
 
-	r = dbus_message_is_signal(msg, DEVICED_INTERFACE_TIME, TIME_CHANGE_SIGNAL);
-	if (!r) {
+	ret = dbus_message_is_signal(msg, DEVICED_INTERFACE_TIME, TIME_CHANGE_SIGNAL);
+	if (!ret) {
 		_E("dbus_message_is_signal error");
 		return;
 	}
 
 	_I("%s - %s", DEVICED_INTERFACE_TIME, TIME_CHANGE_SIGNAL);
-
+	if (ret < 0)
+		_R("[NG] ---- %s", __func__);
+	else
+		_R("[OK] ---- %s", __func__);
 	unregister_edbus_signal_handler();
 	ecore_shutdown();
 }

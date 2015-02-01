@@ -64,9 +64,17 @@ int run_child(int argc, const char *argv[])
 	pid_t pid;
 	struct sigaction act, oldact;
 	int r;
+	FILE *fp;
 
 	if (!argv)
 		return -EINVAL;
+
+	fp = fopen(argv[0], "r");
+	if (fp == NULL) {
+		_E("fail %s (%s)", argv[0], strerror(errno));
+		return -errno;
+	}
+	fclose(fp);
 
 	/* Use default signal handler */
 	act.sa_handler = SIG_DFL;

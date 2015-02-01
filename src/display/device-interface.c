@@ -26,8 +26,11 @@
 #include <string.h>
 #include <unistd.h>
 #include <limits.h>
+#include <math.h>
+#include <journal/display.h>
 
 #include "core/log.h"
+#include "core/devices.h"
 #include "util.h"
 #include "device-interface.h"
 #include "vconf.h"
@@ -37,6 +40,11 @@
 
 #define TOUCH_ON	1
 #define TOUCH_OFF	0
+
+#define LCD_PHASED_MIN_BRIGHTNESS	1
+#define LCD_PHASED_MAX_BRIGHTNESS	100
+#define LCD_PHASED_CHANGE_STEP		5
+#define LCD_PHASED_DELAY		35000 /* microsecond */
 
 typedef struct _PMSys PMSys;
 struct _PMSys {
@@ -48,16 +56,12 @@ struct _PMSys {
 	int (*sys_get_power_lock_support) (PMSys *);
 	int (*sys_get_lcd_power) (PMSys *);
 	int (*bl_onoff) (PMSys *, int);
-	int (*bl_brt) (PMSys *, int);
+	int (*bl_brt) (PMSys *, int, int);
 };
 
 static PMSys *pmsys;
 struct _backlight_ops backlight_ops;
-struct _touch_ops touch_ops;
 struct _power_ops power_ops;
-
-static char *touchscreen_node;
-static char *touchkey_node;
 
 #ifdef ENABLE_X_LCD_ONOFF
 #include "x-lcd-on.c"
@@ -77,11 +81,14 @@ static int _bl_onoff(PMSys *p, int on)
 	return device_set_property(DEVICE_TYPE_DISPLAY, cmd, on);
 }
 
-static int _bl_brt(PMSys *p, int brightness)
+static int _bl_brt(PMSys *p, int brightness, int delay)
 {
 	int ret = -1;
 	int cmd;
 	int prev;
+
+	if (delay > 0)
+		usleep(delay);
 
 	if (force_brightness > 0 && brightness != p->dim_brt) {
 		_I("brightness(%d), force brightness(%d)",
@@ -299,74 +306,50 @@ static int backlight_hbm_off(void)
 	return 0;
 #endif
 }
-
-static int touchscreen_on(void)
+void change_brightness(int start, int end, int step)
 {
-	int ret;
+	int diff, val;
+	int ret = -1;
+	int cmd;
+	int prev;
 
-	if (!touchscreen_node)
-		return -ENOENT;
+	if ((pm_status_flag & PWRSV_FLAG) &&
+	    !(pm_status_flag & BRTCH_FLAG))
+		return;
 
-	ret = sys_set_int(touchscreen_node, TOUCH_ON);
-	if (ret < 0)
-		_E("Failed to on touch screen!");
+	cmd = DISP_CMD(PROP_DISPLAY_BRIGHTNESS, DEFAULT_DISPLAY);
+	ret = device_get_property(DEVICE_TYPE_DISPLAY, cmd, &prev);
 
-	return ret;
+	if (prev == end)
+		return;
 
+	_D("start %d end %d step %d", start, end, step);
+
+	diff = end - start;
+
+	if (abs(diff) < step)
+		val = (diff > 0 ? 1 : -1);
+	else
+		val = (int)ceil(diff / step);
+
+	while (start != end) {
+		if (val == 0) break;
+
+		start += val;
+		if ((val > 0 && start > end) ||
+		    (val < 0 && start < end))
+			start = end;
+
+		pmsys->bl_brt(pmsys, start, LCD_PHASED_DELAY);
+	}
 }
 
-static int touchscreen_off(void)
-{
-	int ret;
-
-	if (!touchscreen_node)
-		return -ENOENT;
-
-	if (display_conf.alpm_on == true)
-		return -EPERM;
-
-	ret = sys_set_int(touchscreen_node, TOUCH_OFF);
-	if (ret < 0)
-		_E("Failed to off touch screen!");
-
-	return ret;
-}
-
-static int touchkey_on(void)
-{
-	int ret;
-
-	if (!touchkey_node)
-		return -ENOENT;
-
-	ret = sys_set_int(touchkey_node, TOUCH_ON);
-	if (ret < 0)
-		_E("Failed to on touch key!");
-
-	return ret;
-
-}
-
-static int touchkey_off(void)
-{
-	int ret;
-
-	if (!touchkey_node)
-		return -ENOENT;
-
-	ret = sys_set_int(touchkey_node, TOUCH_OFF);
-	if (ret < 0)
-		_E("Failed to off touch key!");
-
-	return ret;
-}
-
-static int backlight_on(void)
+static int backlight_on(enum device_flags flags)
 {
 	int ret = -1;
 	int i;
 
-	_D("LCD on");
+	_D("LCD on %x", flags);
 
 	if (!pmsys || !pmsys->bl_onoff)
 		return -1;
@@ -377,6 +360,7 @@ static int backlight_on(void)
 #ifdef ENABLE_PM_LOG
 			pm_history_save(PM_LOG_LCD_ON, pm_cur_state);
 #endif
+			journal_display_on(pmsys->def_brt);
 			break;
 		} else {
 #ifdef ENABLE_PM_LOG
@@ -391,18 +375,29 @@ static int backlight_on(void)
 		}
 	}
 
+	if (flags & LCD_PHASED_TRANSIT_MODE)
+		change_brightness(LCD_PHASED_MIN_BRIGHTNESS,
+		    pmsys->def_brt, LCD_PHASED_CHANGE_STEP);
+
 	return ret;
 }
 
-static int backlight_off(void)
+static int backlight_off(enum device_flags flags)
 {
 	int ret = -1;
 	int i;
 
-	_D("LCD off");
+	_D("LCD off %x", flags);
 
 	if (!pmsys || !pmsys->bl_onoff)
 		return -1;
+
+	if (flags & LCD_PHASED_TRANSIT_MODE)
+		change_brightness(pmsys->def_brt,
+		    LCD_PHASED_MIN_BRIGHTNESS, LCD_PHASED_CHANGE_STEP);
+
+	if (flags & AMBIENT_MODE)
+		return 0;
 
 	for (i = 0; i < PM_LCD_RETRY_CNT; i++) {
 #ifdef ENABLE_X_LCD_ONOFF
@@ -414,6 +409,7 @@ static int backlight_off(void)
 #ifdef ENABLE_PM_LOG
 			pm_history_save(PM_LOG_LCD_OFF, pm_cur_state);
 #endif
+			journal_display_off();
 			break;
 		} else {
 #ifdef ENABLE_PM_LOG
@@ -434,7 +430,7 @@ static int backlight_dim(void)
 {
 	int ret = 0;
 	if (pmsys && pmsys->bl_brt) {
-		ret = pmsys->bl_brt(pmsys, pmsys->dim_brt);
+		ret = pmsys->bl_brt(pmsys, pmsys->dim_brt, 0);
 #ifdef ENABLE_PM_LOG
 		if (!ret)
 			pm_history_save(PM_LOG_LCD_DIM, pm_cur_state);
@@ -480,7 +476,7 @@ static int custom_backlight_update(void)
 		ret = backlight_dim();
 	} else if (pmsys && pmsys->bl_brt) {
 		_I("custom brightness restored! %d", custom_brightness);
-		ret = pmsys->bl_brt(pmsys, custom_brightness);
+		ret = pmsys->bl_brt(pmsys, custom_brightness, 0);
 	}
 
 	return ret;
@@ -512,18 +508,18 @@ static int backlight_update(void)
 	if ((pm_status_flag & PWRSV_FLAG) && !(pm_status_flag & BRTCH_FLAG)) {
 		ret = backlight_dim();
 	} else if (pmsys && pmsys->bl_brt) {
-		ret = pmsys->bl_brt(pmsys, pmsys->def_brt);
+		ret = pmsys->bl_brt(pmsys, pmsys->def_brt, 0);
 	}
 	return ret;
 }
 
-static int backlight_standby(void)
+static int backlight_standby(int force)
 {
 	int ret = -1;
 	if (!pmsys || !pmsys->bl_onoff)
 		return -1;
 
-	if (get_lcd_power() == PM_LCD_POWER_ON) {
+	if ((get_lcd_power() == PM_LCD_POWER_ON) || force) {
 		_I("LCD standby");
 		ret = pmsys->bl_onoff(pmsys, STATUS_STANDBY);
 	}
@@ -569,11 +565,6 @@ void _init_ops(void)
 	backlight_ops.custom_update = custom_backlight_update;
 	backlight_ops.set_force_brightness = set_force_brightness;
 
-	touch_ops.screen_on = touchscreen_on;
-	touch_ops.screen_off = touchscreen_off;
-	touch_ops.key_on = touchkey_on;
-	touch_ops.key_off = touchkey_off;
-
 	power_ops.suspend = system_suspend;
 	power_ops.pre_suspend = system_pre_suspend;
 	power_ops.post_resume = system_post_resume;
@@ -603,12 +594,6 @@ int init_sysfs(unsigned int flags)
 		return -1;
 	}
 
-	touchscreen_node = getenv("PM_TOUCHSCREEN");
-	_D("touchscreen node : %s", touchscreen_node);
-
-	touchkey_node = getenv("PM_TOUCHKEY");
-	_D("touchkey node : %s", touchkey_node);
-
 	_init_ops();
 
 	return 0;
@@ -617,16 +602,23 @@ int init_sysfs(unsigned int flags)
 int exit_sysfs(void)
 {
 	int fd;
+	const struct device_ops *ops = NULL;
 
 	fd = open("/tmp/sem.pixmap_1", O_RDONLY);
 	if (fd == -1) {
 		_E("X server disable");
-		backlight_on();
+		backlight_on(NORMAL_MODE);
 	}
 
 	backlight_update();
-	touchscreen_on();
-	touchkey_on();
+
+	ops = find_device("touchscreen");
+	if (!check_default(ops))
+		ops->start(NORMAL_MODE);
+
+	ops = find_device("touchkey");
+	if (!check_default(ops))
+		ops->start(NORMAL_MODE);
 
 	free(pmsys);
 	pmsys = NULL;

@@ -25,11 +25,11 @@ static const struct device_change_type {
 	{"udev",		"stop"},
 };
 
-static int test(int index)
+static int udev(int index)
 {
 	DBusError err;
 	DBusMessage *msg;
-	int ret, ret_val;
+	int ret, val;
 	char *param[3];
 
 	param[0] = UDEV;
@@ -48,16 +48,22 @@ static int test(int index)
 
 	dbus_error_init(&err);
 
-	ret = dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &ret_val, DBUS_TYPE_INVALID);
+	ret = dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &val, DBUS_TYPE_INVALID);
 	if (!ret) {
 		_E("no message : [%s:%s]", err.name, err.message);
-		ret_val = -EBADMSG;
+		val = -EBADMSG;
 	}
-	_I("START");
+	_I("%s", device_change_types[index].status);
+	if (val < 0)
+		_R("[NG] ---- %s             : %s",
+		__func__, device_change_types[index].status);
+	else
+		_R("[OK] ---- %s             : %s",
+		__func__, device_change_types[index].status);
 	dbus_message_unref(msg);
 	dbus_error_free(&err);
 	sleep(TEST_WAIT_TIME_INTERVAL);
-	return ret_val;
+	return val;
 }
 
 static void unit(char *unit, char *status)
@@ -68,7 +74,7 @@ static void unit(char *unit, char *status)
 		if (strcmp(unit, device_change_types[index].name) != 0 ||
 		    strcmp(status, device_change_types[index].status) != 0)
 			continue;
-		test(index);
+		udev(index);
 	}
 }
 
@@ -78,7 +84,7 @@ static void udev_init(void *data)
 
 	_I("start test");
 	for (index = 0; index < ARRAY_SIZE(device_change_types); index++)
-		test(index);
+		udev(index);
 }
 
 static void udev_exit(void *data)

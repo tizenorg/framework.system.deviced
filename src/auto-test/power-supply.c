@@ -21,9 +21,17 @@
 #define S_ENTER	1
 #define S_LEAVE	0
 
+enum apps_enable_type{
+	APPS_DISABLE = 0,
+	APPS_ENABLE = 1,
+};
+
 #define SIGNAL_CHARGE_NOW "ChargeNow"
 #define SIGNAL_CHARGER_STATUS "ChargerStatus"
 #define SIGNAL_TEMP_GOOD "TempGood"
+
+#define METHOD_LOWBAT_POPUP_DISABLE	"LowBatteryDisable"
+#define METHOD_LOWBAT_POPUP_ENABLE	"LowBatteryEnable"
 
 static E_DBus_Signal_Handler *edbus_charge_now_handler;
 static E_DBus_Signal_Handler *edbus_charger_status_handler;
@@ -88,8 +96,12 @@ static struct power_supply_type {
 
 	{"ta",   S_ENTER, "100","Charging",    "Good", "2", "1", "CHARGE"},   //charging
 	{"ta",   S_LEAVE, "100","Discharging", "Good", "1", "1", "DISCHARGE"},//discharging
-	{"capacity",   S_ENTER, "100","Discharging", "Good", "1", "1", "CAPACITY"},//charging
-	{"capacity",   S_LEAVE, "100","Charging", "Good", "2", "1", "CAPACITY"},//discharging
+
+	{"full", S_ENTER, "100","Full",        "Good", "2", "1", "CHARGE"},   //full
+	{"full", S_LEAVE, "100","Discharging", "Good", "1", "1", "DISCHARGE"},//discharging
+
+	{"capa", S_ENTER, "100","Discharging", "Good", "1", "1", "CAPACITY"},//discharging
+	{"capa", S_LEAVE, "100","Charging",    "Good", "2", "1", "CAPACITY"},//charging
 };
 
 static void unregister_edbus_signal_handler(void)
@@ -248,7 +260,7 @@ edbus_handler_out:
 	e_dbus_shutdown();
 	return ret;
 }
-static void test_signal(void)
+static void power_supply_signal(void)
 {
 	_I("test");
 	register_charge_now_handler();
@@ -257,11 +269,11 @@ static void test_signal(void)
 	ecore_main_loop_begin();
 }
 
-static int test(int index)
+static int power_supply(int index)
 {
 	DBusError err;
 	DBusMessage *msg;
-	int ret, ret_val;
+	int ret, val;
 	char *param[7];
 
 	param[0] = POWER_SUBSYSTEM;
@@ -285,16 +297,16 @@ static int test(int index)
 
 	dbus_error_init(&err);
 
-	ret = dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &ret_val, DBUS_TYPE_INVALID);
+	ret = dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &val, DBUS_TYPE_INVALID);
 	if (ret == 0) {
 		_E("no message : [%s:%s]", err.name, err.message);
 		dbus_error_free(&err);
-		ret_val = -EBADMSG;
+		val = -EBADMSG;
 	}
 
 	if (power_supply_types[index].name != NULL)
 		_I("++++++++++[START] %s ++++++++++", power_supply_types[index].name);
-	_I("CAPACITY(%s , %s) P(%s) STATUS(%s) HEALTH(%s)",
+	_I("C(%s , %s) P(%s) STATUS(%s) HEALTH(%s)",
 		power_supply_types[index].capacity,
 		power_supply_types[index].online,
 		power_supply_types[index].present,
@@ -302,11 +314,20 @@ static int test(int index)
 		power_supply_types[index].health);
 	if (power_supply_types[index].name != NULL)
 		_I("++++++++++[END] %s ++++++++++", power_supply_types[index].name);
-
+	if (val < 0)
+		_R("[NG] ---- %s", __func__);
+	else
+		_R("[OK] ---- %s     : C(%s , %s) P(%s) S(%s) H(%s)",
+		__func__,
+		power_supply_types[index].capacity,
+		power_supply_types[index].online,
+		power_supply_types[index].present,
+		power_supply_types[index].charge_status,
+		power_supply_types[index].health);
 	dbus_message_unref(msg);
 	dbus_error_free(&err);
 	sleep(TEST_WAIT_TIME_INTERVAL);
-	return ret_val;
+	return val;
 }
 
 static void scenario(char *scenario)
@@ -316,7 +337,7 @@ static void scenario(char *scenario)
 	for (index = 0; index < ARRAY_SIZE(power_supply_types); index++) {
 		if (strcmp(scenario, power_supply_types[index].scenario) != 0)
 			continue;
-		test(index);
+		power_supply(index);
 	}
 }
 
@@ -332,7 +353,7 @@ static void unit(char *unit, int status)
 		    power_supply_types[index].status != status)
 			continue;
 		found = 1;
-		test(index);
+		power_supply(index);
 	}
 
 	if (found)
@@ -347,13 +368,73 @@ static void unit(char *unit, int status)
 		return;
 
 	for (index = 0; index < ARRAY_SIZE(power_supply_types); index++) {
-		if (strcmp("capacity", power_supply_types[index].scenario) != 0 ||
+		if (strcmp("capa", power_supply_types[index].scenario) != 0 ||
 		    power_supply_types[index].status != status)
 			continue;
 		power_supply_types[index].capacity = unit;
 		_D("%s", power_supply_types[index].capacity);
-		test(index);
+		power_supply(index);
 	}
+}
+
+static void full(char *unit, char *capacity, int status)
+{
+	int index;
+	for (index = 0; index < ARRAY_SIZE(power_supply_types); index++) {
+		if (strcmp(unit, power_supply_types[index].scenario) != 0 ||
+		    power_supply_types[index].status != status)
+			continue;
+		power_supply_types[index].capacity = capacity;
+		_D("%s", power_supply_types[index].capacity);
+		power_supply(index);
+	}
+}
+
+static void lowbat_popup(char *status)
+{
+	DBusError err;
+	DBusMessage *msg;
+	int ret, val;
+	char *method;
+
+	if (!status)
+		return;
+	val = atoi(status);
+	if (val != APPS_ENABLE && val != APPS_DISABLE)
+		return;
+
+	if (val == APPS_ENABLE)
+		method = METHOD_LOWBAT_POPUP_ENABLE;
+	else
+		method = METHOD_LOWBAT_POPUP_DISABLE;
+	msg = dbus_method_sync_with_reply(DEVICED_BUS_NAME,
+		DEVICED_PATH_APPS,
+		DEVICED_INTERFACE_APPS,
+		method, NULL, NULL);
+
+	if (!msg) {
+		_E("fail : %s %s %s %s",
+			DEVICED_BUS_NAME, DEVICED_PATH_APPS, DEVICED_INTERFACE_APPS, method);
+		return;
+	}
+
+	dbus_error_init(&err);
+
+	ret = dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &val, DBUS_TYPE_INVALID);
+	if (ret == 0) {
+		_E("no message : [%s:%s]", err.name, err.message);
+		dbus_error_free(&err);
+		val = -EBADMSG;
+	}
+
+	if (val < 0)
+		_R("[NG] ---- %s      : V(%s %d)", __func__, method, val);
+	else
+		_R("[OK] ---- %s      : V(%s %d)", __func__, method, val);
+	dbus_message_unref(msg);
+	dbus_error_free(&err);
+	sleep(TEST_WAIT_TIME_INTERVAL);
+	return;
 }
 
 static void power_supply_init(void *data)
@@ -362,7 +443,7 @@ static void power_supply_init(void *data)
 
 	_I("start test");
 	for (index = 0; index < ARRAY_SIZE(power_supply_types); index++)
-		test(index);
+		power_supply(index);
 }
 
 static void power_supply_exit(void *data)
@@ -374,16 +455,22 @@ static int power_supply_unit(int argc, char **argv)
 {
 	if (argv[1] == NULL)
 		return -EINVAL;
-	else if (argc != 4)
+	else if (argc < 4)
 		return -EAGAIN;
 	if (strcmp("wait", argv[2]) == 0)
-		test_signal();
+		power_supply_signal();
+	else if (strcmp("popup", argv[2]) == 0)
+		lowbat_popup(argv[3]);
 	else if (strcmp("scenario", argv[2]) == 0)
 		scenario(argv[3]);
 	else if (strcmp("enter", argv[3]) == 0)
 		unit(argv[2], S_ENTER);
 	else if (strcmp("leave", argv[3]) == 0)
 		unit(argv[2], S_LEAVE);
+	else if (strcmp("enter", argv[4]) == 0)
+		full(argv[2], argv[3], S_ENTER);
+	else if (strcmp("leave", argv[4]) == 0)
+		full(argv[2], argv[3], S_LEAVE);
 	return 0;
 }
 

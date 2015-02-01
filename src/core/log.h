@@ -30,5 +30,4 @@
 
 #define LOG_TAG "DEVICED"
 #include "shared/log-macro.h"
-
 #endif

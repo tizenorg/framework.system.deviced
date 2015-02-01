@@ -20,6 +20,7 @@
 #ifndef __CORE_COMMON_H__
 #define __CORE_COMMON_H__
 
+#include <Ecore.h>
 #include <stdio.h>
 #include <error.h>
 #include <stdbool.h>
@@ -93,6 +94,39 @@
 #define USEC_TO_MSEC(x)		((double)x/1000)
 #endif
 
+#ifndef safe_free
+#define safe_free(x) safe_free_memory((void**)&(x))
+#endif
+
+static inline void safe_free_memory(void** mem)
+{
+	if (mem && *mem) {
+		free(*mem);
+		*mem = NULL;
+	}
+}
+
+#define ret_value_if(expr, val) do { \
+        if (expr) { \
+                _E("(%s)", #expr); \
+                return (val); \
+        } \
+} while (0)
+
+#define ret_value_msg_if(expr, val, fmt, arg...) do {	\
+	if (expr) {				\
+		_E(fmt, ##arg);			\
+		return val;			\
+	}					\
+} while (0)
+
+#define ret_msg_if(expr, fmt, arg...) do {	\
+	if (expr) {				\
+		_E(fmt, ##arg);			\
+		return;			\
+	}					\
+} while (0)
+
 FILE * open_proc_oom_score_adj_file(int pid, const char *mode);
 int get_exec_pid(const char *execpath);
 int get_cmdline_name(pid_t pid, char *cmdline, size_t cmdline_size);
@@ -103,6 +137,7 @@ int sys_get_int(char *fname, int *val);
 int sys_set_int(char *fname, int val);
 int terminate_process(char* partition, bool force);
 int mount_check(const char* path);
+void print_time(const char *prefix);
 
 #endif	/* __CORE_COMMON_H__ */
 

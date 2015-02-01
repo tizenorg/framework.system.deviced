@@ -29,7 +29,7 @@
 #include "core/device-handler.h"
 
 #define SMART_STAY	2
-#define SMART_DETECTION_LIB "/usr/lib/sensor_framework/libsmart_detection.so"
+#define SMART_DETECTION_LIB "/usr/lib/libsmart_detection.so"
 #define CB_TIMEOUT	3 /* seconds */
 #define OCCUPIED_FAIL	-2
 

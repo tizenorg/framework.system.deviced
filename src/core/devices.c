@@ -24,6 +24,10 @@
 #include "common.h"
 #include "devices.h"
 
+static const struct device_ops default_ops = {
+	.name = "default-ops",
+};
+
 static dd_list *dev_head;
 
 void add_device(const struct device_ops *dev)
@@ -48,7 +52,14 @@ const struct device_ops *find_device(const char *name)
 		if (!strcmp(dev->name, name))
 			return dev;
 	}
-	return NULL;
+
+	dev = &default_ops;
+	return dev;
+}
+
+int check_default(const struct device_ops *dev)
+{
+	return (dev == &default_ops);
 }
 
 void devices_init(void *data)

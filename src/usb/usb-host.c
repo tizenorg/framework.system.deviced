@@ -65,7 +65,7 @@ dd_list *get_device_list(void)
 void launch_ticker_notification(char *name)
 {
 	struct ticker_data ticker;
-	const struct device_ops *ticker_ops;
+	const struct device_ops *ticker_ops = NULL;
 
 	if (!name) {
 		_E("ticker noti name is NULL");
@@ -75,8 +75,7 @@ void launch_ticker_notification(char *name)
 	ticker.name = name;
 	ticker.type = 0; /* WITHOUT_QUEUE */
 
-	ticker_ops = find_device("ticker");
-
+	FIND_DEVICE_VOID(ticker_ops, "ticker");
 	if (ticker_ops && ticker_ops->init)
 		ticker_ops->init(&ticker);
 	else
@@ -93,12 +92,7 @@ void launch_host_syspopup(char *name, char *method,
 	if (!name || !method)
 		return;
 
-	if (apps == NULL) {
-		apps = find_device("apps");
-		if (apps == NULL)
-			return;
-	}
-
+	FIND_DEVICE_VOID(apps, "apps");
 	params.name = name;
 	params.method = method;
 	params.key1 = key1;

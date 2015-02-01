@@ -30,15 +30,12 @@
 #include <sys/mount.h>
 #include <device-node.h>
 #include "core/common.h"
-#include "core/data.h"
 #include "core/device-handler.h"
 #include "core/device-notifier.h"
 #include "core/devices.h"
 #include "core/edbus-handler.h"
 #include "core/launch.h"
 #include "core/log.h"
-#include "core/predefine.h"
-#include "core/queue.h"
 #include "dd-deviced.h"
 #include "display/poll.h"
 #include "display/setting.h"
@@ -47,7 +44,6 @@
 #include "proc/proc-handler.h"
 
 #define SIGNAL_BOOTING_DONE		"BootingDone"
-#define PREDEF_PWROFF_POPUP		"pwroff-popup"
 #define POWEROFF_POPUP_NAME		"poweroff-syspopup"
 #define RECOVERY_POWER_OFF		"reboot recovery"
 
@@ -88,18 +84,56 @@ static int systemd_shutdown(const char *arg)
 	assert(arg);
 	systemd_poweroff_timer = ecore_timer_add(SYSTEMD_CHECK_POWER_OFF,
 			    systemd_force_shutdown_cb, (void *)arg);
+#ifdef MICRO_DD
 	start_boot_animation();
 	device_notify(DEVICE_NOTIFIER_POWEROFF_HAPTIC, NULL);
+#endif
 	return launch_evenif_exist("/usr/bin/systemctl", arg);
 }
 
-int do_poweroff(int argc, char **argv)
+static int poweroff(void)
 {
 	return vconf_set_int(VCONFKEY_SYSMAN_POWER_OFF_STATUS,
 			     VCONFKEY_SYSMAN_POWER_OFF_DIRECT);
 }
 
-static void poweroff_control_cb(keynode_t *in_key, struct main_data *ad)
+static int pwroff_popup(void)
+{
+	struct popup_data *params;
+	static const struct device_ops *apps = NULL;
+	int val;
+
+	val = hall_ic_status();
+	if (val == HALL_IC_CLOSED) {
+		_I("cover is closed");
+		return 0;
+	}
+
+	FIND_DEVICE_INT(apps, "apps");
+	params = malloc(sizeof(struct popup_data));
+	if (params == NULL) {
+		_E("Malloc failed");
+		return -1;
+	}
+	params->name = POWEROFF_POPUP_NAME;
+	apps->init((void *)params);
+	free(params);
+	return 0;
+}
+
+static int power_execute(void *data)
+{
+	int ret;
+
+	if (strncmp(POWER_POWEROFF, (char *)data, LEN_POWER_POWEROFF) == 0)
+		ret = poweroff();
+	else if (strncmp(PWROFF_POPUP, (char *)data, LEN_PWROFF_POPUP) == 0)
+		ret = pwroff_popup();
+
+	return ret;
+}
+
+static void poweroff_control_cb(keynode_t *in_key, void *data)
 {
 	int val;
 	int ret;
@@ -130,9 +164,9 @@ static void poweroff_control_cb(keynode_t *in_key, struct main_data *ad)
 	case VCONFKEY_SYSMAN_POWER_OFF_RESTART:
 		device_notify(DEVICE_NOTIFIER_POWEROFF,
 			      (void *)VCONFKEY_SYSMAN_POWER_OFF_RESTART);
-		ret = systemd_shutdown(PREDEF_REBOOT);
+		ret = systemd_shutdown(POWER_REBOOT);
 		if (ret < 0)
-			_E("fail to do (%s)", PREDEF_REBOOT);
+			_E("fail to do (%s)", POWER_REBOOT);
 		break;
 	case SYSTEMD_STOP_POWER_RESTART_RECOVERY:
 		device_notify(DEVICE_NOTIFIER_POWEROFF,
@@ -142,7 +176,7 @@ static void poweroff_control_cb(keynode_t *in_key, struct main_data *ad)
 			_E("fail to do (%s)", RECOVERY_POWER_OFF);
 		break;
 	case VCONFKEY_SYSMAN_POWER_OFF_POPUP:
-		notify_action(PREDEF_PWROFF_POPUP, 0);
+		power_execute(PWROFF_POPUP);
 		break;
 	}
 
@@ -164,9 +198,12 @@ static void booting_done_edbus_signal_handler(void *data, DBusMessage *msg)
 
 static int hall_ic_status(void)
 {
-	if (!hall_ic)
+	int ret;
+
+	ret = device_get_status(hall_ic);
+	if (ret < 0)
 		return HALL_IC_OPENED;
-	return hall_ic->status();
+	return ret;
 }
 
 int reset_resetkey_disable(char *name, enum watch_id id)
@@ -259,33 +296,6 @@ static const struct edbus_method edbus_methods[] = {
 	/* Add methods here */
 };
 
-int launching_predefine_action(int argc, char **argv)
-{
-	struct popup_data *params;
-	static const struct device_ops *apps = NULL;
-	int val;
-
-	val = hall_ic_status();
-	if (val == HALL_IC_CLOSED) {
-		_I("cover is closed");
-		return 0;
-	}
-	if (apps == NULL) {
-		apps = find_device("apps");
-		if (apps == NULL)
-			return 0;
-	}
-	params = malloc(sizeof(struct popup_data));
-	if (params == NULL) {
-		_E("Malloc failed");
-		return -1;
-	}
-	params->name = POWEROFF_POPUP_NAME;
-	apps->init((void *)params);
-	free(params);
-	return 0;
-}
-
 static void power_init(void *data)
 {
 	int bTelReady = 0;
@@ -306,11 +316,6 @@ static void power_init(void *data)
 		_E("fail to register handler for signal: %s",
 		   SIGNAL_BOOTING_DONE);
 
-	register_action(PREDEF_POWEROFF,
-			do_poweroff, NULL, NULL);
-	register_action(PREDEF_PWROFF_POPUP,
-			launching_predefine_action, NULL, NULL);
-
 	ret = vconf_notify_key_changed(VCONFKEY_SYSMAN_POWER_OFF_STATUS,
 				       (void *)poweroff_control_cb,
 				       NULL);
@@ -322,8 +327,9 @@ static void power_init(void *data)
 
 static const struct device_ops power_device_ops = {
 	.priority = DEVICE_PRIORITY_NORMAL,
-	.name	  = "systemd-power",
-	.init	  = power_init,
+	.name     = "systemd-power",
+	.init     = power_init,
+	.execute  = power_execute,
 };
 
 DEVICE_OPS_REGISTER(&power_device_ops)

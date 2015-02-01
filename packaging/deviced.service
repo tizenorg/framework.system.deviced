@@ -1,6 +1,6 @@
 [Unit]
 Description=System device daemon
-After=deviced-pre.service pulseaudio.service sound-init.service
+After=deviced-pre.service immvibed.service
 Requires=deviced-pre.service
 
 [Service]

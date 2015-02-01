@@ -33,7 +33,12 @@ int __WEAK__ control_brightness_key(int action);
 
 /* src/display/alpm.c */
 int __WEAK__ alpm_set_state(int);
-int __WEAK__ set_alpm_screen(char *);
+int __WEAK__ alpm_get_state(void);
+int __WEAK__ set_alpm_screen(char *, pid_t pid);
+bool __WEAK__ check_suspend_direct(pid_t pid);
+int __WEAK__ get_ambient_mode(void);
+void __WEAK__ check_alpm_invalid_state(void);
+int __WEAK__ check_alpm_lcdon_ready(void);
 
 #endif
 

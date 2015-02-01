@@ -25,7 +25,6 @@
 #include <vconf.h>
 
 #include "deviced/dd-led.h"
-#include "xml.h"
 #include "core/log.h"
 #include "core/common.h"
 #include "core/edbus-handler.h"
@@ -33,6 +32,7 @@
 #include "core/device-notifier.h"
 #include "core/device-handler.h"
 #include "display/core.h"
+#include "conf.h"
 
 #define BOOT_ANIMATION_FINISHED		1
 
@@ -53,17 +53,32 @@ enum {
 	LED_CUSTOM_DEFAULT = (LED_CUSTOM_DUTY_ON),
 };
 
-static bool charging_key;
-static bool lowbat_key;
+static int charging_key;
+static int lowbat_key;
 static bool charging_state;
 static bool lowbat_state;
 static bool full_state;
 static bool badbat_state;
 static bool ovp_state;
-static bool rgb_blocked = false;
+static int rgb_blocked = false;
 static bool rgb_dumpmode = false;
 static Ecore_Timer *dumpmode_timer = NULL;
 static enum state_t lcd_state = S_NORMAL;
+static Ecore_Timer *reset_timer;
+
+static int rgb_start(enum device_flags flags)
+{
+	_I("rgbled device will be started");
+	rgb_blocked = false;
+	return 0;
+}
+
+static int rgb_stop(enum device_flags flags)
+{
+	_I("rgbled device will be stopped");
+	rgb_blocked = true;
+	return 0;
+}
 
 static int led_prop(int mode, int on, int off, unsigned int color)
 {
@@ -94,8 +109,8 @@ static int led_prop(int mode, int on, int off, unsigned int color)
 		break;
 	}
 
-	_D("changed mode(%d) : on(%d), off(%d), color(%x)",
-			mode, led->data.on, led->data.off, led->data.color);
+	_D("changed mode(%d) : state(%d), on(%d), off(%d), color(%x)",
+			mode, led->state, led->data.on, led->data.off, led->data.color);
 	return 0;
 }
 
@@ -150,9 +165,11 @@ static unsigned int led_blend(unsigned int before)
 	return COMBINE_RGB(red, grn, blu);
 }
 
+static Eina_Bool timer_reset_cb(void *data);
 static int led_mode_to_device(struct led_mode *led)
 {
 	int val, color;
+	double time;
 
 	if (led == NULL)
 		return 0;
@@ -162,6 +179,16 @@ static int led_mode_to_device(struct led_mode *led)
 
 	if (rgb_blocked && led->mode != LED_POWER_OFF && led->mode != LED_OFF)
 		return 0;
+
+	if (led->data.duration > 0) {
+		time = ((led->data.on + led->data.off) * led->data.duration) / 1000.f;
+		if (reset_timer)
+			ecore_timer_del(reset_timer);
+		reset_timer = ecore_timer_add(time, timer_reset_cb, led);
+		if (!reset_timer)
+			_E("failed to add reset timer");
+		_D("add reset timer (mode:%d, %lfs)", led->mode, time);
+	}
 
 	val = LED_VALUE(led->data.on, led->data.off);
 	color = led_blend(led->data.color);
@@ -175,10 +202,32 @@ static int led_mode_to_device(struct led_mode *led)
 	return 0;
 }
 
+static Eina_Bool timer_reset_cb(void *data)
+{
+	struct led_mode *led = (struct led_mode*)data;
+
+	if (!led)
+		return ECORE_CALLBACK_CANCEL;
+
+	led->state = false;
+	_D("reset timer (mode:%d)", led->mode);
+
+	/* turn off previous setting */
+	led = find_led_data(LED_OFF);
+	led_mode_to_device(led);
+
+	led = get_valid_led_data(lcd_state);
+	/* preventing duplicated requests */
+	if (led && led->mode != LED_OFF)
+		led_mode_to_device(led);
+
+	return ECORE_CALLBACK_CANCEL;
+}
+
 static int led_display_changed_cb(void *data)
 {
 	struct led_mode *led = NULL;
-	int val;
+	int state;
 
 	/* store last display condition */
 	lcd_state = (enum state_t)data;
@@ -188,11 +237,22 @@ static int led_display_changed_cb(void *data)
 		return 0;
 
 	if (lcd_state == S_LCDOFF)
-		led = get_valid_led_data();
+		state = DURING_LCD_OFF;
 	else if (lcd_state == S_NORMAL || lcd_state == S_LCDDIM)
-		led = find_led_data(LED_OFF);
+		state = DURING_LCD_ON;
+	else
+		return 0;
 
-	return led_mode_to_device(led);
+	/* turn off previous setting */
+	led = find_led_data(LED_OFF);
+	led_mode_to_device(led);
+
+	led = get_valid_led_data(state);
+	/* preventing duplicated requests */
+	if (led && led->mode != LED_OFF)
+		led_mode_to_device(led);
+
+	return 0;
 }
 
 static int led_charging_changed_cb(void *data)
@@ -340,6 +400,17 @@ static void led_vconf_blocking_cb(keynode_t *key, void *data)
 	_I("rgbled blocking mode %s", (rgb_blocked ? "started" : "stopped"));
 }
 
+static void led_vconf_psmode_cb(keynode_t *key, void *data)
+{
+	int psmode;
+
+	psmode = vconf_keynode_get_int(key);
+	if (psmode == SETTING_PSMODE_EMERGENCY)
+		rgb_stop(NORMAL_MODE);
+	else
+		rgb_start(NORMAL_MODE);
+}
+
 static DBusMessage *edbus_playcustom(E_DBus_Object *obj, DBusMessage *msg)
 {
 	DBusMessageIter iter;
@@ -381,6 +452,20 @@ static DBusMessage *edbus_stopcustom(E_DBus_Object *obj, DBusMessage *msg)
 	DBusMessageIter iter;
 	DBusMessage *reply;
 	int val, ret;
+	bool state;
+
+	ret = get_led_mode_state(LED_CUSTOM, &state);
+	if (ret < 0) {
+		_E("failed to get led mode state : %d", ret);
+		ret = -EPERM;
+		goto error;
+	}
+
+	if (!state) {
+		_E("not play custom led");
+		ret = -EPERM;
+		goto error;
+	}
 
 	/* reset default value */
 	ret = led_mode(LED_CUSTOM, false);
@@ -388,6 +473,7 @@ static DBusMessage *edbus_stopcustom(E_DBus_Object *obj, DBusMessage *msg)
 
 	_D("stop custom %d", ret);
 
+error:
 	reply = dbus_message_new_method_return(msg);
 	dbus_message_iter_init_append(reply, &iter);
 	dbus_message_iter_append_basic(&iter, DBUS_TYPE_INT32, &ret);
@@ -423,6 +509,15 @@ static DBusMessage *edbus_set_mode(E_DBus_Object *obj, DBusMessage *msg)
 
 	ret = led_mode(mode, val);
 	ret = led_prop(mode, on, off, color);
+
+	/* If lcd prop has a during_lcd_on bit,
+	   it should turn on/off during lcd on state */
+	led = find_led_data(mode);
+	if (led && (led->data.lcd & DURING_LCD_ON) &&
+	    (lcd_state == S_NORMAL || lcd_state == S_LCDDIM)) {
+		led = get_valid_led_data(DURING_LCD_ON);
+		led_mode_to_device(led);
+	}
 
 	/* Exception case :
 	   in case of display off condition,
@@ -526,7 +621,7 @@ static const struct edbus_method edbus_methods[] = {
 
 static void rgb_init(void *data)
 {
-	int ta_connected, boot;
+	int ta_connected, boot, psmode;
 	int ret;
 	struct led_mode *led;
 
@@ -537,6 +632,9 @@ static void rgb_init(void *data)
 
 	/* get led mode data from xml */
 	get_led_data();
+
+	/* LED_OFF state must be always true */
+	led_mode(LED_OFF, true);
 
 	/* verify booting or restart */
 	ret = vconf_get_int(VCONFKEY_BOOT_ANIMATION_FINISHED, &boot);
@@ -567,11 +665,11 @@ next:
 	register_notifier(DEVICE_NOTIFIER_BATTERY_OVP, led_battery_ovp_changed_cb);
 
 	/* initialize vconf value */
-	vconf_get_bool(VCONFKEY_SETAPPL_LED_INDICATOR_CHARGING, (int*)&charging_key);
-	vconf_get_bool(VCONFKEY_SETAPPL_LED_INDICATOR_LOW_BATT, (int*)&lowbat_key);
+	vconf_get_bool(VCONFKEY_SETAPPL_LED_INDICATOR_CHARGING, &charging_key);
+	vconf_get_bool(VCONFKEY_SETAPPL_LED_INDICATOR_LOW_BATT, &lowbat_key);
 
 	/* initialize led indicator blocking value */
-	vconf_get_bool(VCONFKEY_SETAPPL_BLOCKINGMODE_LED_INDICATOR, (int*)&rgb_blocked);
+	vconf_get_bool(VCONFKEY_SETAPPL_BLOCKINGMODE_LED_INDICATOR, &rgb_blocked);
 
 	/* register vconf callback */
 	vconf_notify_key_changed(VCONFKEY_SETAPPL_LED_INDICATOR_CHARGING,
@@ -582,6 +680,14 @@ next:
 	/* register led indicator blocking vconf callback */
 	vconf_notify_key_changed(VCONFKEY_SETAPPL_BLOCKINGMODE_LED_INDICATOR,
 			led_vconf_blocking_cb, NULL);
+
+	/* check power saving state */
+	vconf_get_int(VCONFKEY_SETAPPL_PSMODE, &psmode);
+	if (psmode == SETTING_PSMODE_EMERGENCY)
+		rgb_stop(NORMAL_MODE);
+
+	/* register power saving callback */
+	vconf_notify_key_changed(VCONFKEY_SETAPPL_PSMODE, led_vconf_psmode_cb, NULL);
 
 	ret = device_get_property(DEVICE_TYPE_POWER, PROP_POWER_CHARGE_NOW, &ta_connected);
 	if (!ret && ta_connected)
@@ -602,6 +708,9 @@ static void rgb_exit(void *data)
 	vconf_ignore_key_changed(VCONFKEY_SETAPPL_BLOCKINGMODE_LED_INDICATOR,
 			led_vconf_blocking_cb);
 
+	/* unregister power saving callback */
+	vconf_ignore_key_changed(VCONFKEY_SETAPPL_PSMODE, led_vconf_psmode_cb);
+
 	/* unregister notifier for each event */
 	unregister_notifier(DEVICE_NOTIFIER_LCD, led_display_changed_cb);
 	unregister_notifier(DEVICE_NOTIFIER_BATTERY_CHARGING, led_charging_changed_cb);
@@ -617,20 +726,6 @@ static void rgb_exit(void *data)
 
 	/* release led mode data */
 	release_led_data();
-}
-
-static int rgb_start(void)
-{
-	_I("rgbled device will be started");
-	rgb_blocked = false;
-	return 0;
-}
-
-static int rgb_stop(void)
-{
-	_I("rgbled device will be stopped");
-	rgb_blocked = true;
-	return 0;
 }
 
 static const struct device_ops rgbled_device_ops = {

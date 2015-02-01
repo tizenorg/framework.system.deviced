@@ -21,7 +21,6 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <vconf.h>
-#include "core.h"
 #include "log.h"
 #include "edbus-handler.h"
 #include "display/poll.h"

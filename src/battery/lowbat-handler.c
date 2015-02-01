@@ -27,9 +27,6 @@
 #include "config.h"
 #include "core/log.h"
 #include "core/launch.h"
-#include "core/noti.h"
-#include "core/queue.h"
-#include "core/data.h"
 #include "core/devices.h"
 #include "core/device-handler.h"
 #include "core/device-notifier.h"
@@ -40,9 +37,7 @@
 #include "display/poll.h"
 #include "core/edbus-handler.h"
 #include "core/power-supply.h"
-
-#define PREDEF_LOWBAT			"lowbat"
-#define PREDEF_LOWBAT_CHANGE_FREQ	"lowbat_change_freq"
+#include "power/power-handler.h"
 
 #define CHARGE_POWERSAVE_FREQ_ACT	"charge_powersave_freq_act"
 #define CHARGE_RELEASE_FREQ_ACT		"charge_release_freq_act"
@@ -50,7 +45,6 @@
 
 #define BATTERY_CHARGING	65535
 #define BATTERY_UNKNOWN		-1
-#define BATTERY_FULL		100
 
 #define WARNING_LOW_BAT_ACT		"warning_low_bat_act"
 #define CRITICAL_LOW_BAT_ACT		"critical_low_bat_act"
@@ -86,7 +80,13 @@ static int cur_bat_capacity = -1;
 
 static int lowbat_popup_option = 0;
 static int lowbat_freq = -1;
-static struct battery_config_info battery_info;
+static struct battery_config_info battery_info = {
+	.normal   = BATTERY_NORMAL,
+	.warning  = BATTERY_WARNING,
+	.critical = BATTERY_CRITICAL,
+	.poweroff = BATTERY_POWEROFF,
+	.realoff  = BATTERY_REALOFF,
+};
 
 static dd_list *lpe = NULL;
 static int scenario_count = 0;
@@ -102,7 +102,7 @@ static int lowbat_initialized(void *data)
 	return status;
 }
 
-int lowbat_scenario(int old, int now, void *data)
+static int lowbat_scenario(int old, int now, void *data)
 {
 	dd_list *n;
 	struct lowbat_process_entry *scenario;
@@ -120,7 +120,7 @@ int lowbat_scenario(int old, int now, void *data)
 	return found;
 }
 
-int lowbat_add_scenario(int old, int now, int (*func)(void *data))
+static int lowbat_add_scenario(int old, int now, int (*func)(void *data))
 {
 	struct lowbat_process_entry *scenario;
 
@@ -155,21 +155,143 @@ static void print_lowbat_state(unsigned int bat_percent)
 #endif
 }
 
-int battery_check_act(void *data)
+static int power_execute(void)
 {
-	notify_action(PREDEF_LOWBAT, 1, CHARGE_CHECK_ACT);
+	static const struct device_ops *ops = NULL;
+
+	FIND_DEVICE_INT(ops, POWER_OPS_NAME);
+
+	return ops->execute(INTERNAL_PWROFF);
+}
+
+static int booting_done(void *data)
+{
+	static int done = 0;
+
+	if (data == NULL)
+		goto out;
+	done = (int)data;
+	if (!done)
+		goto out;
+	_I("booting done");
+out:
+	return done;
+}
+
+static int lowbat_popup(char *option)
+{
+	static int launched_poweroff = 0;
+	static const struct device_ops *apps = NULL;
+	struct popup_data *params;
+	int ret, state=0;
+	int r_disturb, s_disturb, r_block, s_block;
+	char *value;
+	pid_t pid;
+
+	if (!option)
+		return -1;
+
+	if (strcmp(option, POWER_OFF_BAT_ACT))
+		launched_poweroff = 0;
+
+	if (!strcmp(option, CRITICAL_LOW_BAT_ACT)) {
+#ifdef MICRO_DD
+		value = "lowbattery_critical";
+#else
+		value = "critical";
+#endif
+		lowbat_popup_option = LOWBAT_OPT_CHECK;
+	} else if (!strcmp(option, WARNING_LOW_BAT_ACT)) {
+		if (is_factory_mode() == 1)
+			return 0;
+#ifdef MICRO_DD
+		value = "lowbattery_warning";
+#else
+		value = "warning";
+#endif
+		lowbat_popup_option = LOWBAT_OPT_WARNING;
+	} else if (!strcmp(option, POWER_OFF_BAT_ACT)) {
+		value = "poweroff";
+		lowbat_popup_option = LOWBAT_OPT_POWEROFF;
+	} else if (!strcmp(option, CHARGE_ERROR_ACT)) {
+		value = "chargeerr";
+		lowbat_popup_option = LOWBAT_OPT_CHARGEERR;
+	} else if (!strcmp(option, CHARGE_ERROR_LOW_ACT)) {
+		value = "chargeerrlow";
+		lowbat_popup_option = LOWBAT_OPT_CHARGEERR;
+	} else if (!strcmp(option, CHARGE_ERROR_HIGH_ACT)) {
+		value = "chargeerrhigh";
+		lowbat_popup_option = LOWBAT_OPT_CHARGEERR;
+	} else if (!strcmp(option, CHARGE_ERROR_OVP_ACT)) {
+		value = "chargeerrovp";
+		lowbat_popup_option = LOWBAT_OPT_CHARGEERR;
+	} else if (!strcmp(option, CHARGE_CHECK_ACT)) {
+		launched_poweroff = 0;
+		return 0;
+	} else
+		return -1;
+	_D("%s", value);
+	ret = vconf_get_int(VCONFKEY_STARTER_SEQUENCE, &state);
+	if (state == 1 || ret != 0 || booting_done(NULL)) {
+
+		if (launched_poweroff == 1) {
+			_I("will be foreced power off");
+			power_execute();
+			return 0;
+		}
+
+		if (lowbat_popup_option == LOWBAT_OPT_POWEROFF)
+			launched_poweroff = 1;
+
+		pid = get_exec_pid(LOWBAT_EXEC_PATH);
+		if (pid > 0) {
+			_I("pre launched %s destroy", LOWBAT_EXEC_PATH);
+			kill(pid, SIGTERM);
+		}
+
+		FIND_DEVICE_INT(apps, "apps");
+
+		params = malloc(sizeof(struct popup_data));
+		if (params == NULL) {
+			_E("Malloc failed");
+			return -1;
+		}
+		r_disturb = vconf_get_int("memory/shealth/sleep/do_not_disturb", &s_disturb);
+		r_block = vconf_get_bool("db/setting/blockmode_wearable", &s_block);
+		if ((r_disturb != 0 && r_block != 0) ||
+		    (s_disturb == 0 && s_block == 0) ||
+		    lowbat_popup_option == LOWBAT_OPT_CHARGEERR)
+			pm_change_internal(getpid(), LCD_NORMAL);
+		else
+			_I("block LCD");
+		params->name = LOWBAT_POPUP_NAME;
+		params->key = POPUP_KEY_CONTENT;
+		params->value = strdup(value);
+		apps->init((void *)params);
+		free(params->value);
+		free(params);
+	} else {
+		_D("boot-animation running yet");
+	}
+
 	return 0;
 }
 
-int battery_warning_low_act(void *data)
+static int battery_check_act(void *data)
 {
-	notify_action(PREDEF_LOWBAT, 1, WARNING_LOW_BAT_ACT);
+	lowbat_popup(CHARGE_CHECK_ACT);
 	return 0;
 }
 
-int battery_critical_low_act(void *data)
+static int battery_warning_low_act(void *data)
 {
-	notify_action(PREDEF_LOWBAT, 1, CRITICAL_LOW_BAT_ACT);
+	lowbat_popup(WARNING_LOW_BAT_ACT);
+	return 0;
+}
+
+static int battery_critical_low_act(void *data)
+{
+	lowbat_popup(CRITICAL_LOW_BAT_ACT);
 	return 0;
 }
 
@@ -181,25 +303,25 @@ int battery_power_off_act(void *data)
 
 int battery_charge_err_act(void *data)
 {
-	notify_action(PREDEF_LOWBAT, 1, CHARGE_ERROR_ACT);
+	lowbat_popup(CHARGE_ERROR_ACT);
 	return 0;
 }
 
 int battery_charge_err_low_act(void *data)
 {
-	notify_action(PREDEF_LOWBAT, 1, CHARGE_ERROR_LOW_ACT);
+	lowbat_popup(CHARGE_ERROR_LOW_ACT);
 	return 0;
 }
 
 int battery_charge_err_high_act(void *data)
 {
-	notify_action(PREDEF_LOWBAT, 1, CHARGE_ERROR_HIGH_ACT);
+	lowbat_popup(CHARGE_ERROR_HIGH_ACT);
 	return 0;
 }
 
 int battery_charge_err_ovp_act(void *data)
 {
-	notify_action(PREDEF_LOWBAT, 1, CHARGE_ERROR_OVP_ACT);
+	lowbat_popup(CHARGE_ERROR_OVP_ACT);
 	return 0;
 }
 
@@ -222,10 +344,9 @@ static int battery_charge_act(void *data)
 static void lowbat_scenario_init(void)
 {
 	lowbat_add_scenario(battery_info.normal, battery_info.warning, battery_warning_low_act);
-	lowbat_add_scenario(battery_info.warning, battery_info.critical, battery_warning_low_act);
-	lowbat_add_scenario(battery_info.critical, battery_info.poweroff, battery_critical_low_act);
+	lowbat_add_scenario(battery_info.warning, battery_info.critical, battery_critical_low_act);
 	lowbat_add_scenario(battery_info.poweroff, battery_info.realoff, battery_power_off_act);
-	lowbat_add_scenario(battery_info.normal, battery_info.critical, battery_warning_low_act);
+	lowbat_add_scenario(battery_info.normal, battery_info.critical, battery_critical_low_act);
 	lowbat_add_scenario(battery_info.warning, battery_info.poweroff, battery_critical_low_act);
 	lowbat_add_scenario(battery_info.critical, battery_info.realoff, battery_power_off_act);
 	lowbat_add_scenario(battery_info.normal, battery_info.poweroff, battery_critical_low_act);
@@ -276,14 +397,16 @@ static int lowbat_process(int bat_percent, void *ad)
 	int status = -1;
 	bool low_bat = false;
 	bool full_bat = false;
+#ifdef MICRO_DD
 	int extreme = 0;
+#endif
 	int result = 0;
+	int lock = -1;
 
 	new_bat_capacity = bat_percent;
 	if (new_bat_capacity < 0)
 		return -EINVAL;
 	change_lowbat_level(new_bat_capacity);
-	pm_lock_internal(INTERNAL_LOCK_BATTERY, LCD_OFF, STAY_CUR_STATE, 0);
 
 	if (new_bat_capacity != cur_bat_capacity) {
 		_D("[BAT_MON] cur = %d new = %d", cur_bat_capacity, new_bat_capacity);
@@ -338,6 +461,7 @@ static int lowbat_process(int bat_percent, void *ad)
 
 
 	if (status != -1) {
+		lock = pm_lock_internal(INTERNAL_LOCK_BATTERY, LCD_OFF, STAY_CUR_STATE, 0);
 		ret = vconf_set_int(VCONFKEY_SYSMAN_BATTERY_STATUS_LOW, status);
 		power_supply_broadcast(CHARGE_LEVEL_SIGNAL, status);
 		if (update_pm_setting)
@@ -348,12 +472,12 @@ static int lowbat_process(int bat_percent, void *ad)
 		result = -EIO;
 		goto exit;
 	}
-
+#ifdef MICRO_DD
 	if (vconf_get_int(VCONFKEY_PM_KEY_IGNORE, &extreme) == 0 && extreme == TRUE &&
 	    (status > VCONFKEY_SYSMAN_BAT_POWER_OFF && status <= VCONFKEY_SYSMAN_BAT_FULL))
 		if (vconf_set_int(VCONFKEY_PM_KEY_IGNORE, FALSE) == 0)
 			_I("release key ignore");
-
+#endif
 	if (new_bat_capacity <= battery_info.warning)
 		low_bat = true;
 
@@ -366,15 +490,17 @@ static int lowbat_process(int bat_percent, void *ad)
 		cur_bat_state = battery_info.normal;
 	result = lowbat_scenario(cur_bat_state, new_bat_state, NULL);
 	if (result)
-		_I("cur_bat_state %d, new_bat_state %d", cur_bat_state, new_bat_state);
+		_I("cur %d, new %d(capacity %d)",
+		cur_bat_state, new_bat_state, bat_percent);
 	cur_bat_state = new_bat_state;
 exit:
-	pm_unlock_internal(INTERNAL_LOCK_BATTERY, LCD_OFF, PM_SLEEP_MARGIN);
+	if (lock == 0)
+		pm_unlock_internal(INTERNAL_LOCK_BATTERY, LCD_OFF, PM_SLEEP_MARGIN);
 
 	return result;
 }
 
-static int lowbat_read()
+static int lowbat_read(void)
 {
 	int bat_percent, r;
 
@@ -383,6 +509,19 @@ static int lowbat_read()
 		return r;
 
 	return bat_percent;
+}
+
+static int change_freq(char *option)
+{
+	int val = 0;
+
+	if (!option)
+		return -1;
+
+	if (!strcmp(option, CHARGE_POWERSAVE_FREQ_ACT))
+		val = 1;
+	device_notify(DEVICE_NOTIFIER_PMQOS_LOWBAT, (void*)val);
+	return 0;
 }
 
 static void change_lowbat_cpu_freq(int bat_percent)
@@ -394,16 +533,16 @@ static void change_lowbat_cpu_freq(int bat_percent)
 
 	if (bat_percent > battery_info.poweroff && init_cpu_freq == 0) {
 		init_cpu_freq = 1;
-		notify_action(PREDEF_LOWBAT_CHANGE_FREQ, 1, CHARGE_RELEASE_FREQ_ACT);
+		change_freq(CHARGE_RELEASE_FREQ_ACT);
 		return;
 	}
 
 	if (bat_percent <= battery_info.poweroff && power_save == 0) {
 		power_save = 1;
-		notify_action(PREDEF_LOWBAT_CHANGE_FREQ, 1, CHARGE_POWERSAVE_FREQ_ACT);
+		change_freq(CHARGE_POWERSAVE_FREQ_ACT);
 	} else if (power_save == 1) {
 		power_save = 0;
-		notify_action(PREDEF_LOWBAT_CHANGE_FREQ, 1, CHARGE_RELEASE_FREQ_ACT);
+		change_freq(CHARGE_RELEASE_FREQ_ACT);
 	}
 }
 
@@ -456,107 +595,6 @@ static int check_battery()
 	return ret;
 }
 
-static int booting_done(void *data)
-{
-	static int done = 0;
-
-	if (data == NULL)
-		goto out;
-	done = (int)data;
-	if (!done)
-		goto out;
-	_I("booting done");
-out:
-	return done;
-}
-
-int lowbat_action(int argc, char **argv)
-{
-	int ret, state=0;
-	char argstr[128];
-	char* option = NULL;
-	char *value;
-	static int launched_poweroff = 0;
-	pid_t pid;
-	struct popup_data *params;
-	static const struct device_ops *apps = NULL;
-
-	if (argc < 1)
-		return -1;
-
-	if (strcmp(argv[0], POWER_OFF_BAT_ACT))
-		launched_poweroff = 0;
-
-	if (!strcmp(argv[0], CRITICAL_LOW_BAT_ACT)) {
-		value = "extreme";
-		lowbat_popup_option = LOWBAT_OPT_CHECK;
-	} else if (!strcmp(argv[0], WARNING_LOW_BAT_ACT)) {
-		if (is_factory_mode() == 1)
-			return 0;
-		value = "warning";
-		lowbat_popup_option = LOWBAT_OPT_WARNING;
-	} else if (!strcmp(argv[0], POWER_OFF_BAT_ACT)) {
-		value = "poweroff";
-		lowbat_popup_option = LOWBAT_OPT_POWEROFF;
-	} else if (!strcmp(argv[0], CHARGE_ERROR_ACT)) {
-		value = "chargeerr";
-		lowbat_popup_option = LOWBAT_OPT_CHARGEERR;
-	} else if (!strcmp(argv[0], CHARGE_ERROR_LOW_ACT)) {
-		value = "chargeerrlow";
-		lowbat_popup_option = LOWBAT_OPT_CHARGEERR;
-	} else if (!strcmp(argv[0], CHARGE_ERROR_HIGH_ACT)) {
-		value = "chargeerrhigh";
-		lowbat_popup_option = LOWBAT_OPT_CHARGEERR;
-	} else if (!strcmp(argv[0], CHARGE_ERROR_OVP_ACT)) {
-		value = "chargeerrovp";
-		lowbat_popup_option = LOWBAT_OPT_CHARGEERR;
-	} else if (!strcmp(argv[0], CHARGE_CHECK_ACT)) {
-		launched_poweroff = 0;
-		return 0;
-	} else
-		return -1;
-	_D("%s", value);
-	ret = vconf_get_int(VCONFKEY_STARTER_SEQUENCE, &state);
-	if (state == 1 || ret != 0 || booting_done(NULL)) {
-
-		if (launched_poweroff == 1) {
-			_I("will be foreced power off");
-			do_poweroff(0, NULL);
-			return 0;
-		}
-
-		if (lowbat_popup_option == LOWBAT_OPT_POWEROFF)
-			launched_poweroff = 1;
-
-		pid = predefine_get_pid(LOWBAT_EXEC_PATH);
-		if (pid > 0) {
-			_I("pre launched %s destroy", LOWBAT_EXEC_PATH);
-			kill(pid, SIGTERM);
-		}
-		if (apps == NULL) {
-			apps = find_device("apps");
-			if (apps == NULL)
-				return 0;
-		}
-		params = malloc(sizeof(struct popup_data));
-		if (params == NULL) {
-			_E("Malloc failed");
-			return -1;
-		}
-		pm_change_internal(getpid(), LCD_NORMAL);
-		params->name = LOWBAT_POPUP_NAME;
-		params->key = POPUP_KEY_CONTENT;
-		params->value = strdup(value);
-		apps->init((void *)params);
-		free(params->value);
-		free(params);
-	} else {
-		_D("boot-animation running yet");
-	}
-
-	return 0;
-}
-
 static int check_power_save_mode(void)
 {
 	int ret = 0;
@@ -574,19 +612,6 @@ static int check_power_save_mode(void)
 	return ret;
 }
 
-int change_freq_action(int argc, char **argv)
-{
-	int val = 0;
-
-	if (argc < 1)
-		return -1;
-
-	if (!strcmp(argv[0], CHARGE_POWERSAVE_FREQ_ACT))
-		val = 1;
-	device_notify(DEVICE_NOTIFIER_PMQOS_LOWBAT, (void*)val);
-	return 0;
-}
-
 static int lowbat_monitor_init(void *data)
 {
 	int status = 1;
@@ -597,8 +622,7 @@ static int lowbat_monitor_init(void *data)
 	_I("%d %d %d %d %d", battery_info.normal, battery_info.warning,
 		battery_info.critical, battery_info.poweroff, battery_info.realoff);
 	lowbat_scenario_init();
-	register_action(PREDEF_LOWBAT, lowbat_action, NULL, NULL);
-	register_action(PREDEF_LOWBAT_CHANGE_FREQ, change_freq_action, NULL, NULL);
+	check_lowbat_percent(&battery.capacity);
 	lowbat_process(battery.capacity, NULL);
 	return 0;
 }
@@ -621,7 +645,7 @@ static const struct device_ops lowbat_device_ops = {
 	.priority = DEVICE_PRIORITY_NORMAL,
 	.name     = "lowbat",
 	.init     = lowbat_init,
-	.exit    = lowbat_exit,
+	.exit     = lowbat_exit,
 };
 
 DEVICE_OPS_REGISTER(&lowbat_device_ops)

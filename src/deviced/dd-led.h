@@ -52,6 +52,8 @@ enum LED_MODE {
 	LED_CHARGING_ERROR,
 	LED_MISSED_NOTI,
 	LED_VOICE_RECORDING,
+	LED_REMOTE_CONTROLLER,
+	LED_AIR_WAKEUP,
 	LED_POWER_OFF,
 	LED_CUSTOM,
 	LED_MODE_MAX,
@@ -127,7 +129,7 @@ int led_set_brightness_with_noti(int val, bool enable);
  *  This API is used to set command of the irled.\n
  *  It sets the command to control irled by calling device_set_property() function.\n
  * @param[in] value string that you want to set
- * @return 0 on success, -1 if failed
+ * @return 0 on success, negative value if failed
  * @see led_set_brightness_with_noti()
  * @par Example
  * @code

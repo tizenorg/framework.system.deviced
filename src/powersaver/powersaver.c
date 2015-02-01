@@ -23,129 +23,88 @@
 #include "core/devices.h"
 #include "core/device-notifier.h"
 #include "core/log.h"
-#include "display/core.h"
-#include "display/device-interface.h"
 
-static int set_powersaver_mode(int on)
+static int power_saving_custom_cpu_cb(keynode_t *key_nodes, void *data)
 {
-	int ret;
-	int brightness, timeout;
+	int val = 0;
 
-	_I("powersaver mode %s", (on ? "on" : "off"));
-	device_notify(DEVICE_NOTIFIER_POWERSAVER, (void*)on);
-
-	/* powersaver mode off */
-	if (!on) {
-		backlight_ops.set_force_brightness(0);
-		set_force_lcdtimeout(0);
-		goto update_state;
-	}
-
-	/* powersaver mode on (brightness) */
-	ret = vconf_get_int(VCONFKEY_SETAPPL_EMERGENCY_LCD_BRIGHTNESS_INT,
-	    &brightness);
-	if (ret != 0) {
-		_E("Failed to get powersaver brightness!");
-		return ret;
-	}
-	ret = backlight_ops.set_force_brightness(brightness);
-	if (ret < 0) {
-		_E("Failed to set force brightness!");
-		return ret;
-	}
-	_I("force brightness %d", brightness);
-
-	/* powersaver mode on (lcd timeout) */
-	ret = vconf_get_int(VCONFKEY_SETAPPL_EMERGENCY_LCD_TIMEOUT_INT,
-	    &timeout);
-	if (ret != 0) {
-		_E("Failed to get powersaver lcd timeout!");
-		return ret;
-	}
-	ret = set_force_lcdtimeout(timeout);
-	if (ret < 0) {
-		_E("Failed to set force timeout!");
-		return ret;
-	}
-	_I("force timeout %d", timeout);
-
-update_state:
-	/* update internal state */
-	if (hbm_get_state())
-		hbm_set_state_with_timeout(false, 0);
-	backlight_ops.update();
-	ret = get_run_timeout(&timeout);
-	if (ret >= 0)
-		states[S_NORMAL].timeout = timeout;
-	states[pm_cur_state].trans(EVENT_INPUT);
-
+	val = vconf_keynode_get_bool(key_nodes);
+	device_notify(DEVICE_NOTIFIER_PMQOS_POWERSAVING, (void*)val);
 	return 0;
 }
 
-static void powersaver_status_changed(keynode_t *key_nodes, void *data)
+static int emergency_cpu_cb(keynode_t *key_nodes, void *data)
 {
-	int status, on, ret;
+	int val;
 
-	if (key_nodes == NULL) {
-		_E("wrong parameter, key_nodes is null");
+	val = vconf_keynode_get_int(key_nodes);
+	if (val == SETTING_PSMODE_EMERGENCY)
+		val = 1;
+	else
+		val = 0;
+	device_notify(DEVICE_NOTIFIER_PMQOS_EMERGENCY, (void*)val);
+	return 0;
+}
+
+static void set_freq_limit(void)
+{
+	int ret = 0;
+	int val = 0;
+
+	ret = vconf_get_bool(VCONFKEY_SETAPPL_PWRSV_CUSTMODE_CPU,
+			&val);
+	if (ret < 0) {
+		_E("failed to get vconf key");
 		return;
 	}
+	if (val == 0)
+		return;
+	_I("init");
+	device_notify(DEVICE_NOTIFIER_PMQOS_POWERSAVING, (void*)val);
+}
 
-	status = vconf_keynode_get_int(key_nodes);
-	if (status == SETTING_PSMODE_NORMAL)
-		on = false;
-	else if (status == SETTING_PSMODE_WEARABLE)
-		on = true;
-	else
+static void set_emergency_limit(void)
+{
+	int ret, val;
+
+	ret = vconf_get_int(VCONFKEY_SETAPPL_PSMODE, &val);
+	if (ret < 0) {
+		_E("failed to get vconf key");
+		return;
+	}
+	if (val != SETTING_PSMODE_EMERGENCY)
 		return;
 
-	ret = set_powersaver_mode(on);
-	if (ret < 0)
-		_E("Failed to update powersaver state %d", ret);
+	val = 1;
+	device_notify(DEVICE_NOTIFIER_PMQOS_EMERGENCY, (void*)val);
+
 }
 
 static int booting_done(void *data)
 {
-	int ret, status;
+	set_freq_limit();
+	set_emergency_limit();
 
-	ret = vconf_get_int(VCONFKEY_SETAPPL_PSMODE, &status);
-	if (ret != 0) {
-		_E("Failed to vconf get bool!");
-		return -EIO;
-	}
-
-	if (status != SETTING_PSMODE_WEARABLE)
-		return 0;
-
-	_D("powersaver mode on!");
-	ret = set_powersaver_mode(true);
-	if (ret < 0)
-		_E("Failed to update powersaver state %d", ret);
-
-	return ret;
+	return 0;
 }
 
 static void powersaver_init(void *data)
 {
 	int ret;
 
-	ret = vconf_notify_key_changed(VCONFKEY_SETAPPL_PSMODE,
-	    powersaver_status_changed, NULL);
+	ret = vconf_notify_key_changed(VCONFKEY_SETAPPL_PWRSV_CUSTMODE_CPU,
+		(void *)power_saving_custom_cpu_cb, NULL);
 	if (ret != 0)
 		_E("Failed to vconf_notify_key_changed!");
-
+	ret = vconf_notify_key_changed(VCONFKEY_SETAPPL_PSMODE,
+		(void *)emergency_cpu_cb, NULL);
+	if (ret != 0)
+		_E("Failed to vconf_notify_key_changed!");
 	register_notifier(DEVICE_NOTIFIER_BOOTING_DONE, booting_done);
 }
 
 static void powersaver_exit(void *data)
 {
-	int ret;
-
-	ret = vconf_ignore_key_changed(VCONFKEY_SETAPPL_PSMODE,
-	    powersaver_status_changed);
-	if (ret != 0)
-		_E("Failed to vconf_ignore_key_changed!");
-
 	unregister_notifier(DEVICE_NOTIFIER_BOOTING_DONE, booting_done);
 }
 

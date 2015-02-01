@@ -87,7 +87,7 @@ typedef enum
  * @brief Enumerations of unlimited duration for the Haptic API.
  */
 typedef enum {
-	HAPTIC_DURATION_UNLIMITED = 0xFFFFFFFF,
+	HAPTIC_DURATION_UNLIMITED = 0x7FFFFFFF,
 } haptic_duration_e;
 
 /**

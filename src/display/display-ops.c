@@ -36,7 +36,7 @@ void remove_display(const struct display_ops *disp)
 	DD_LIST_REMOVE(disp_head, disp);
 }
 
-const struct display_ops *find_display(const char *name)
+const struct display_ops *find_display_feature(const char *name)
 {
 	dd_list *elem;
 	const struct display_ops *disp;

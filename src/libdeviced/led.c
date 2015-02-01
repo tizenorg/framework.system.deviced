@@ -116,6 +116,10 @@ API int led_set_brightness_with_noti(int val, bool enable)
 
 API int led_set_ir_command(char *value)
 {
+	if (value == NULL) {
+		return -EINVAL;
+	}
+
 	DBusError err;
 	DBusMessage *msg;
 	char *arr[1];

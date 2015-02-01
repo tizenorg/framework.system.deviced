@@ -29,6 +29,7 @@
 #include "core/common.h"
 #include "core/list.h"
 #include "core/device-notifier.h"
+#include "powersaver/powersaver.h"
 #include "pmqos.h"
 
 #define DEFAULT_PMQOS_TIMER		3000
@@ -159,6 +160,30 @@ static int pmqos_emergency(void *data)
 static int pmqos_poweroff(void *data)
 {
 	return set_cpu_pmqos("PowerOff", (int)data);
+}
+
+static int pmqos_ultrapowersaving(void *data)
+{
+	int mode = (int)data;
+	bool on;
+
+	switch (mode) {
+	case POWERSAVER_OFF:
+	case POWERSAVER_BASIC:
+		on = false;
+		break;
+	case POWERSAVER_ENHANCED:
+		on = true;
+		break;
+	default:
+		return -EINVAL;
+	}
+	return set_cpu_pmqos("UltraPowerSaving", (int)on);
+}
+
+static int pmqos_hall(void *data)
+{
+	return pmqos_cpu_request("LockScreen", (int)data);
 }
 
 static DBusMessage *dbus_pmqos_handler(E_DBus_Object *obj, DBusMessage *msg)
@@ -300,6 +325,7 @@ static int get_methods_from_conf(const char *path, struct edbus_method **edbus_m
 /* Add pmqos name as alphabetically */
 static const struct edbus_method edbus_methods[] = {
 	{ "AppLaunch",            "i",    "i", dbus_pmqos_handler },
+	{ "AppLaunchHome",        "i",    "i", dbus_pmqos_handler },
 	{ "BeautyShot",           "i",    "i", dbus_pmqos_handler },
 	{ "Browser",              "i",    "i", dbus_pmqos_handler },
 	{ "BrowserDash",          "i",    "i", dbus_pmqos_handler },
@@ -311,17 +337,21 @@ static const struct edbus_method edbus_methods[] = {
 	{ "CameraCaptureAtRec",   "i",    "i", dbus_pmqos_handler },
 	{ "CameraPreview",        "i",    "i", dbus_pmqos_handler },
 	{ "CameraSoundAndShot",   "i",    "i", dbus_pmqos_handler },
+	{ "ContactSearch",        "i",    "i", dbus_pmqos_handler },
 	{ "Emergency",            "i",    "i", dbus_pmqos_handler },
+	{ "GalleryScroll",        "i",    "i", dbus_pmqos_handler },
 	{ "GalleryRotation",      "i",    "i", dbus_pmqos_handler },
 	{ "GetDefaultLockTime",  NULL,    "i", dbus_getdefaultlocktime },
 	{ "GpsSerialCno",         "i",    "i", dbus_pmqos_handler },
 	{ "GpuBoost",             "i",    "i", dbus_pmqos_handler },
 	{ "GpuWakeup",            "i",    "i", dbus_pmqos_handler },
+	{ "HomeScreen",           "i",    "i", dbus_pmqos_handler },
 	{ "ImageViewer",          "i",    "i", dbus_pmqos_handler },
 	{ "IMEInput",             "i",    "i", dbus_pmqos_handler },
 	{ "LockScreen",           "i",    "i", dbus_pmqos_handler },
 	{ "LowBattery",           "i",    "i", dbus_pmqos_handler },
 	{ "MtpSendFile",          "i",    "i", dbus_pmqos_handler },
+	{ "MusicPlayLcdOn",       "i",    "i", dbus_pmqos_handler },
 	{ "PowerSaving",          "i",    "i", dbus_pmqos_handler },
 	{ "ProcessCrashed",       "i",    "i", dbus_pmqos_handler },
 	{ "ReservedMode",         "i",    "i", dbus_pmqos_handler },
@@ -336,11 +366,18 @@ static const struct edbus_method edbus_methods[] = {
 	{ "SensorWakeup",          "i",    "i", dbus_pmqos_handler },
 };
 
-static void pmqos_init(void *data)
+static int booting_done(void *data)
 {
+	static int done = 0;
 	struct edbus_method *methods = NULL;
 	int ret, size;
 
+	if (data == NULL)
+		goto out;
+	done = (int)data;
+	if (!done)
+		goto out;
+	_I("booting done");
 	/* register edbus methods */
 	ret = register_edbus_method(DEVICED_PATH_PMQOS, edbus_methods, ARRAY_SIZE(edbus_methods));
 	if (ret < 0)
@@ -364,6 +401,17 @@ static void pmqos_init(void *data)
 	register_notifier(DEVICE_NOTIFIER_PMQOS_LOWBAT, pmqos_lowbat);
 	register_notifier(DEVICE_NOTIFIER_PMQOS_EMERGENCY, pmqos_emergency);
 	register_notifier(DEVICE_NOTIFIER_PMQOS_POWEROFF, pmqos_poweroff);
+	register_notifier(DEVICE_NOTIFIER_PMQOS_ULTRAPOWERSAVING,
+	    pmqos_ultrapowersaving);
+	register_notifier(DEVICE_NOTIFIER_PMQOS_HALL, pmqos_hall);
+
+out:
+	return done;
+}
+
+static void pmqos_init(void *data)
+{
+	register_notifier(DEVICE_NOTIFIER_BOOTING_DONE, booting_done);
 }
 
 static void pmqos_exit(void *data)
@@ -373,6 +421,9 @@ static void pmqos_exit(void *data)
 	unregister_notifier(DEVICE_NOTIFIER_PMQOS_LOWBAT, pmqos_lowbat);
 	unregister_notifier(DEVICE_NOTIFIER_PMQOS_EMERGENCY, pmqos_emergency);
 	unregister_notifier(DEVICE_NOTIFIER_PMQOS_POWEROFF, pmqos_poweroff);
+	unregister_notifier(DEVICE_NOTIFIER_PMQOS_ULTRAPOWERSAVING,
+	    pmqos_ultrapowersaving);
+	unregister_notifier(DEVICE_NOTIFIER_PMQOS_HALL, pmqos_hall);
 }
 
 static const struct device_ops pmqos_device_ops = {

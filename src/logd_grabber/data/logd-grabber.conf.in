@@ -1,0 +1,12 @@
+enable_grabber = no
+old_events_del_period = 1800
+proc_stat_store_period = 1800
+old_events_rotate_period = 604800
+power_const_per_uah = 3213253205
+backlight_a = 0.0000258471
+backlight_b = 0.0027898
+backlight_c = 1.36308
+backlight_k = 73.432
+min_term_predict_lifetime = 10800
+mmc_write_sectors_per_uah = 2820
+mmc_read_sectors_per_uah = 4708

@@ -44,6 +44,6 @@ static void __DESTRUCTOR__ module_exit(void)	\
 
 void add_display(const struct display_ops *disp);
 void remove_display(const struct display_ops *disp);
-const struct display_ops *find_display(const char *name);
+const struct display_ops *find_display_feature(const char *name);
 
 #endif

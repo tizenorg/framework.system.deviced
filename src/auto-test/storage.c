@@ -50,7 +50,7 @@ static int request_mem_trim(void)
 	return ret;
 }
 
-static int test_storage(void)
+static int storage(void)
 {
 	DBusError err;
 	DBusMessage *msg;
@@ -76,6 +76,11 @@ static int test_storage(void)
 		_E("no message : [%s:%s]", err.name, err.message);
 	}
 	_I("total : %4.4lf avail %4.4lf", dTotal, dAvail);
+	if (ret < 0)
+		_R("[NG] ---- %s", __func__);
+	else
+		_R("[OK] ---- %s          : T(%4.4lf) A(%4.4lf)",
+		__func__, dTotal, dAvail);
 	dbus_message_unref(msg);
 	dbus_error_free(&err);
 	sleep(TEST_WAIT_TIME_INTERVAL);
@@ -85,7 +90,7 @@ static int test_storage(void)
 static void storage_init(void *data)
 {
 	_I("start test");
-	test_storage();
+	storage();
 }
 
 static void storage_exit(void *data)
@@ -95,14 +100,14 @@ static void storage_exit(void *data)
 
 static int storage_unit(int argc, char **argv)
 {
-	int status;
-
 	if (argv[1] == NULL)
 		return -EINVAL;
-	test_storage();
-	request_mem_trim();
-	ecore_main_loop_begin();
-out:
+	if (strcmp(argv[2], "value") == 0)
+		storage();
+	else if (strcmp(argv[2], "signal") == 0) {
+		request_mem_trim();
+		ecore_main_loop_begin();
+	}
 	return 0;
 }
 

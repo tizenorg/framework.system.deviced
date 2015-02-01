@@ -18,10 +18,11 @@
 
 #include "test.h"
 
+#define METHOD_GET_NUM	"GetNum"
 #define METHOD_GET_SERIAL	"GetSerial"
 #define METHOD_GET_REVISION	"GetHWRev"
 
-void get_serial(void)
+void board_serial(void)
 {
 	DBusError err;
 	DBusMessage *msg;
@@ -46,9 +47,14 @@ void get_serial(void)
 	dbus_error_free(&err);
 
 	_D("%s %d", data, val);
+	if (val < 0)
+		_R("[NG] ---- %s     : V(if your target is eng, NG is Normal)",
+		__func__);
+	else
+		_R("[OK] ---- %s     : V(%s)", __func__, data);
 }
 
-static void get_revision(void)
+static void board_revision(void)
 {
 	DBusError err;
 	DBusMessage *msg;
@@ -76,13 +82,50 @@ static void get_revision(void)
 	} else {
 		_D("Rinato");
 	}
+	if (val < 0)
+		_R("[NG] ---- %s", __func__);
+	else
+		_R("[OK] ---- %s   : V(%d)", __func__, val);
+}
+
+void board_numer(void)
+{
+	DBusError err;
+	DBusMessage *msg;
+	int ret, val;
+	char *data;
+
+	msg = dbus_method_sync_with_reply(DEVICED_BUS_NAME, DEVICED_PATH_BOARD,
+		DEVICED_INTERFACE_BOARD, METHOD_GET_NUM, NULL, NULL);
+	if (!msg) {
+		_E("fail send message");
+		return;
+	}
+
+	dbus_error_init(&err);
+
+	ret = dbus_message_get_args(msg, &err, DBUS_TYPE_STRING, &data, DBUS_TYPE_INT32, &val, DBUS_TYPE_INVALID);
+	if (!ret) {
+		_E("no message : [%s:%s]", err.name, err.message);
+		return;
+	}
+	dbus_message_unref(msg);
+	dbus_error_free(&err);
+
+	_D("%s %d", data, val);
+	if (val < 0)
+		_R("[NG] ---- %s      : V(if your target is eng, NG is Normal)",
+		__func__);
+	else
+		_R("[OK] ---- %s      : V(%s)", __func__, data);
 }
 
 static void board_init(void *data)
 {
 	_I("start test");
-	get_revision();
-	get_serial();
+	board_revision();
+	board_serial();
+	board_numer();
 }
 
 static void board_exit(void *data)
@@ -92,8 +135,9 @@ static void board_exit(void *data)
 
 static int board_unit(int argc, char **argv)
 {
-	get_revision();
-	get_serial();
+	board_revision();
+	board_serial();
+	board_numer();
 	return 0;
 }
 

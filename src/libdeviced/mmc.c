@@ -34,8 +34,14 @@
 
 #define ODE_MOUNT_STATE 1
 
+#define FORMAT_TIMEOUT	(120*1000)
+
 API int mmc_secure_mount(const char *mount_point)
 {
+	if (mount_point == NULL) {
+		return -EINVAL;
+	}
+
 	char *arr[1];
 	arr[0] = (char *)mount_point;
 	return dbus_method_sync(DEVICED_BUS_NAME, DEVICED_PATH_MMC,
@@ -44,6 +50,10 @@ API int mmc_secure_mount(const char *mount_point)
 
 API int mmc_secure_unmount(const char *mount_point)
 {
+	if (mount_point == NULL) {
+		return -EINVAL;
+	}
+
 	char *arr[1];
 	arr[0] = (char *)mount_point;
 	return dbus_method_sync(DEVICED_BUS_NAME, DEVICED_PATH_MMC,
@@ -207,5 +217,5 @@ API int deviced_format_mmc(struct mmc_contents *mmc_data, int option)
 			DEVICED_PATH_MMC,
 			DEVICED_INTERFACE_MMC,
 			METHOD_REQUEST_FORMAT,
-			"i", arr, format_cb, -1, data);
+			"i", arr, format_cb, FORMAT_TIMEOUT, data);
 }

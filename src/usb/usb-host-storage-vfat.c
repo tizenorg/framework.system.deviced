@@ -34,8 +34,8 @@ static const char *vfat_check_arg[] = {
 };
 
 static const char *vfat_arg[] = {
-	"/sbin/mkfs.vfat",
-	NULL, NULL,
+	"/usr/bin/newfs_msdos",
+	"-F", "32", "-O", "tizen", "-c", "8", NULL, NULL,
 };
 
 static int vfat_check(const char *devname)

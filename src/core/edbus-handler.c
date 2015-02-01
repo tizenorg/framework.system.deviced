@@ -19,7 +19,6 @@
 
 #include <stdbool.h>
 #include "core/log.h"
-#include "core/data.h"
 #include "core/edbus-handler.h"
 #include "core/common.h"
 #include "core/device-notifier.h"
@@ -60,14 +59,19 @@ static struct edbus_object {
 	{ DEVICED_PATH_CPU    , DEVICED_INTERFACE_CPU    , NULL, NULL },
 	{ DEVICED_PATH_PMQOS  , DEVICED_INTERFACE_PMQOS  , NULL, NULL },
 	{ DEVICED_PATH_SYSNOTI, DEVICED_INTERFACE_SYSNOTI, NULL, NULL },
+	{ DEVICED_PATH_USB    , DEVICED_INTERFACE_USB    , NULL, NULL },
 	{ DEVICED_PATH_USBHOST, DEVICED_INTERFACE_USBHOST, NULL, NULL },
 	{ DEVICED_PATH_EXTCON , DEVICED_INTERFACE_EXTCON , NULL, NULL },
 	{ DEVICED_PATH_BATTERY, DEVICED_INTERFACE_BATTERY, NULL, NULL },
 	{ DEVICED_PATH_BOARD, DEVICED_INTERFACE_BOARD, NULL, NULL },
 	{ DEVICED_PATH_TESTMODE, DEVICED_INTERFACE_TESTMODE, NULL, NULL},
+	{ DEVICED_PATH_APPS, DEVICED_INTERFACE_APPS, NULL, NULL},
+	{ DEVICED_PATH_GPIO, DEVICED_INTERFACE_GPIO, NULL, NULL},
+	{ DEVICED_PATH_HDMICEC, DEVICED_INTERFACE_HDMICEC, NULL, NULL},
 	/* Add new object & interface here*/
 };
 
+static dd_list *edbus_owner_list;
 static dd_list *edbus_handler_list;
 static dd_list *edbus_watch_list;
 static int edbus_init_val;
@@ -254,9 +258,15 @@ int broadcast_edbus_signal(const char *path, const char *interface,
 		return -EPERM;
 	}
 
-	e_dbus_message_send(edbus_conn, msg, NULL, -1, NULL);
-
+	r = dbus_connection_send(conn, msg, NULL);
 	dbus_message_unref(msg);
+
+	if (r != TRUE) {
+		_E("dbus_connection_send error(%s:%s-%s)",
+		    path, interface, name);
+		return -ECOMM;
+	}
+
 	return 0;
 }
 
@@ -502,6 +512,86 @@ static void request_name_cb(void *data, DBusMessage *msg, DBusError *error)
 	_I("Request Name reply : %d", val);
 }
 
+static void check_owner_name(void)
+{
+	DBusError err;
+	DBusMessage *msg;
+	DBusMessageIter iter;
+	char *pa[1];
+	char exe_name[PATH_MAX];
+	char *entry;
+	dd_list *n;
+	int pid;
+
+	DD_LIST_FOREACH(edbus_owner_list, n, entry) {
+		pa[0] = entry;
+		msg = dbus_method_sync_with_reply(E_DBUS_FDO_BUS,
+			E_DBUS_FDO_PATH,
+			E_DBUS_FDO_INTERFACE,
+			"GetConnectionUnixProcessID", "s", pa);
+
+		if (!msg) {
+			_E("invalid DBusMessage!");
+			return;
+		}
+
+		dbus_error_init(&err);
+		dbus_message_iter_init(msg, &iter);
+
+		dbus_message_iter_get_basic(&iter, &pid);
+		if (get_cmdline_name(pid, exe_name, PATH_MAX) != 0)
+			goto out;
+		_I("%s(%d)", exe_name, pid);
+
+out:
+		dbus_message_unref(msg);
+		dbus_error_free(&err);
+	}
+}
+
+static void check_owner_list(void)
+{
+	DBusError err;
+	DBusMessage *msg;
+	DBusMessageIter array, iter, item, iter_val;
+	char *pa[1];
+	char *name;
+	char *entry;
+
+	pa[0] = DEVICED_BUS_NAME;
+	msg = dbus_method_sync_with_reply(E_DBUS_FDO_BUS,
+			E_DBUS_FDO_PATH,
+			E_DBUS_FDO_INTERFACE,
+			"ListQueuedOwners", "s", pa);
+
+	if (!msg) {
+		_E("invalid DBusMessage!");
+		return;
+	}
+
+	dbus_error_init(&err);
+	dbus_message_iter_init(msg, &array);
+
+	if (dbus_message_iter_get_arg_type(&array) != DBUS_TYPE_ARRAY)
+		goto out;
+	dbus_message_iter_recurse(&array, &item);
+	while (dbus_message_iter_get_arg_type(&item) == DBUS_TYPE_STRING) {
+		dbus_message_iter_get_basic(&item, &name);
+		entry = strndup(name, strlen(name));
+		DD_LIST_APPEND(edbus_owner_list, entry);
+		if (!edbus_owner_list) {
+			_E("append failed");
+			free(entry);
+			goto out;
+		}
+		dbus_message_iter_next(&item);
+	}
+
+out:
+	dbus_message_unref(msg);
+	dbus_error_free(&err);
+}
+
 void edbus_init(void *data)
 {
 	DBusError error;
@@ -568,6 +658,8 @@ void edbus_init(void *data)
 		}
 		_D("add new obj for %s", edbus_objects[i].interface);
 	}
+	check_owner_list();
+	check_owner_name();
 	return;
 
 out3:

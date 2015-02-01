@@ -20,9 +20,13 @@
 #ifndef __POWER_SUPPLY_H__
 #define __POWER_SUPPLY_H__
 
-#define CHARGER_STATUS_SIGNAL "ChargerStatus"
-#define CHARGE_NOW_SIGNAL     "ChargeNow"
-#define CHARGE_LEVEL_SIGNAL   "BatteryStatusLow"
+#define CHARGER_STATUS_SIGNAL      "ChargerStatus"
+#define CHARGE_NOW_SIGNAL          "ChargeNow"
+#define CHARGE_LEVEL_SIGNAL        "BatteryStatusLow"
+#define CHARGE_CAPACITY_SIGNAL     "GetPercent"
+#define CHARGE_CAPACITY_LAW_SIGNAL "GetPercentRaw"
+#define CHARGE_HEALTH_SIGNAL       "GetHealth"
+#define CHARGE_FULL_SIGNAL         "IsFull"
 
 int check_abnormal_popup(void);
 int check_lowbat_charge_device(int bInserted);

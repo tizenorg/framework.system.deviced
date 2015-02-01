@@ -37,6 +37,7 @@
 #include "core/device-notifier.h"
 #include "core/common.h"
 #include "core/devices.h"
+#include "ode/ode.h"
 #include "mmc-handler.h"
 #include "config.h"
 #include "core/edbus-handler.h"
@@ -60,6 +61,13 @@
 #define UNMOUNT_RETRY	5
 
 #define ODE_MOUNT_STATE	1
+
+#define COMM_PKG_MGR_DBUS_SERVICE     "com.samsung.slp.pkgmgr"
+#define COMM_PKG_MGR_DBUS_PATH          "/com/samsung/slp/pkgmgr"
+#define COMM_PKG_MGR_DBUS_INTERFACE COMM_PKG_MGR_DBUS_SERVICE
+#define COMM_PKG_MGR_METHOD                "CreateExternalDirectory"
+
+#define SMACK_LABELING_TIME (0.5)
 
 enum unmount_operation {
 	UNMOUNT_NORMAL = 0,
@@ -101,6 +109,7 @@ static dd_list *fs_head;
 static char *mmc_curpath;
 static bool smack = false;
 static bool mmc_disabled = false;
+static Ecore_Timer *smack_timer = NULL;
 
 int __WEAK__ app2ext_unmount(void);
 
@@ -161,11 +170,8 @@ static void launch_syspopup(char *str)
 	struct popup_data *params;
 	static const struct device_ops *apps = NULL;
 
-	if (apps == NULL) {
-		apps = find_device("apps");
-		if (apps == NULL)
-			return;
-	}
+	FIND_DEVICE_VOID(apps, "apps");
+
 	params = malloc(sizeof(struct popup_data));
 	if (params == NULL) {
 		_E("Malloc failed");
@@ -279,7 +285,7 @@ int get_block_number(void)
 
 					free(str_mmcblk_num);
 					closedir(dp);
-					_D("%d", mmcblk_num);
+					_I("%d", mmcblk_num);
 
 					snprintf(buf, 255, "/sys/block/%s/device/cid", dir->d_name);
 
@@ -356,7 +362,7 @@ static int get_mmc_size(const char *devpath)
 	}
 
 	nbytes = ullbytes/512;
-	_D("block size(64) : %d", nbytes);
+	_I("block size(64) : %d", nbytes);
 	return nbytes;
 }
 
@@ -368,6 +374,43 @@ static int rw_mount(const char *szPath)
 			return -1;
 	}
 	return 0;
+}
+
+static void request_smack_broadcast(void)
+{
+	int ret;
+
+	ret = dbus_method_sync_timeout(COMM_PKG_MGR_DBUS_SERVICE,
+			COMM_PKG_MGR_DBUS_PATH,
+			COMM_PKG_MGR_DBUS_INTERFACE,
+			COMM_PKG_MGR_METHOD,
+			NULL, NULL, SMACK_LABELING_TIME*1000);
+	if (ret != 0)
+		_E("Failed to call dbus method (err: %d)", ret);
+}
+
+static Eina_Bool smack_timer_cb(void *data)
+{
+	if (smack_timer) {
+		ecore_timer_del(smack_timer);
+		smack_timer = NULL;
+	}
+	vconf_set_int(VCONFKEY_SYSMAN_MMC_STATUS, VCONFKEY_SYSMAN_MMC_MOUNTED);
+	vconf_set_int(VCONFKEY_SYSMAN_MMC_MOUNT, VCONFKEY_SYSMAN_MMC_MOUNT_COMPLETED);
+	return EINA_FALSE;
+}
+
+void mmc_mount_done(void)
+{
+	request_smack_broadcast();
+	smack_timer = ecore_timer_add(SMACK_LABELING_TIME,
+			smack_timer_cb, NULL);
+	if (smack_timer) {
+		_I("Wait to check");
+		return;
+	}
+	_E("Fail to add abnormal check timer");
+	smack_timer_cb(NULL);
 }
 
 static int mmc_mount(const char *devpath, const char *mount_point)
@@ -397,7 +440,7 @@ static int mmc_mount(const char *devpath, const char *mount_point)
 	if (!fs)
 		return -EINVAL;
 
-	_D("devpath : %s", devpath);
+	_I("devpath : %s", devpath);
 	r = fs->check(devpath);
 	if (r < 0)
 		_E("failt to check devpath : %s", devpath);
@@ -420,10 +463,13 @@ static void *mount_start(void *arg)
 	int r;
 
 	devpath = data->devpath;
-
-	assert(devpath);
+	if (!devpath) {
+		r = -EINVAL;
+		goto error;
+	}
 
 	/* clear previous filesystem */
+	ode_mmc_removed();
 	mmc_check_and_unmount(MMC_MOUNT_POINT);
 
 	/* check mount point */
@@ -438,25 +484,52 @@ static void *mount_start(void *arg)
 	r = mmc_mount(devpath, MMC_MOUNT_POINT);
 	if (r == -EROFS)
 		launch_syspopup("mountrdonly");
+	/* Do not need to show error popup, if mmc is disabled */
+	else if (r == -EWOULDBLOCK)
+		goto error_without_popup;
 	else if (r < 0)
 		goto error;
 
 	mmc_set_config(MAX_RATIO);
+	r = ode_mmc_inserted();
+	if (r < 0)
+		goto error_ode;
 
 	free(devpath);
 	free(data);
+
+	/* give a transmutable attribute to mount_point */
+	r = setxattr(MMC_MOUNT_POINT, "security.SMACK64TRANSMUTE", "TRUE", strlen("TRUE"), 0);
+	if (r < 0)
+		_E("setxattr error : %s", strerror(errno));
+
+	request_smack_broadcast();
 	vconf_set_int(VCONFKEY_SYSMAN_MMC_STATUS, VCONFKEY_SYSMAN_MMC_MOUNTED);
 	vconf_set_int(VCONFKEY_SYSMAN_MMC_MOUNT, VCONFKEY_SYSMAN_MMC_MOUNT_COMPLETED);
 	return 0;
 
 error:
 	launch_syspopup("mounterr");
+
+error_without_popup:
 	vconf_set_int(VCONFKEY_SYSMAN_MMC_MOUNT, VCONFKEY_SYSMAN_MMC_MOUNT_FAILED);
 	vconf_set_int(VCONFKEY_SYSMAN_MMC_STATUS, VCONFKEY_SYSMAN_MMC_INSERTED_NOT_MOUNTED);
 
 	free(devpath);
 	free(data);
 	_E("failed to mount device : %s", strerror(-r));
+	return (void *)r;
+
+error_ode:
+	/* to ignore previous mount callbck func,
+	   set a specific value(-1) to MMC_MOUNT key */
+	vconf_set_int(VCONFKEY_SYSMAN_MMC_MOUNT, -1);
+	vconf_set_int(VCONFKEY_SYSMAN_MMC_STATUS, -1);
+	r = ODE_MOUNT_STATE;
+
+	free(devpath);
+	free(data);
+	_I("you should mount with encryption");
 	return (void *)r;
 }
 
@@ -469,6 +542,8 @@ static int mmc_unmount(int option, const char *mount_point)
 	r = app2ext_unmount();
 	if (r < 0)
 		_I("Faild to unmount app2ext : %s", strerror(-r));
+	/* it must called before unmounting mmc */
+	ode_mmc_removed();
 	r = mmc_check_and_unmount(mount_point);
 	if (!r)
 		return r;
@@ -512,6 +587,7 @@ static int mmc_unmount(int option, const char *mount_point)
 		if (r < 0)
 			_I("Faild to unmount app2ext : %s", strerror(-r));
 
+		ode_mmc_removed();
 		r = mmc_check_and_unmount(mount_point);
 		if (!r)
 			break;
@@ -595,7 +671,7 @@ static int format(const char *devpath)
 
 	for (retry = FORMAT_RETRY; retry > 0; --retry) {
 		fs->check(devpath);
-		_D("format path : %s", path);
+		_I("format path : %s", path);
 		r = fs->format(path);
 		if (!r)
 			break;
@@ -691,6 +767,7 @@ static int mmc_removed(void)
 	/* first, try to unmount app2ext */
 	app2ext_unmount();
 	/* unmount */
+	ode_mmc_removed();
 	mmc_check_and_unmount((const char *)MMC_MOUNT_POINT);
 	vconf_set_int(VCONFKEY_SYSMAN_MMC_STATUS, VCONFKEY_SYSMAN_MMC_REMOVED);
 	free(mmc_curpath);
@@ -750,7 +827,7 @@ static DBusMessage *edbus_request_secure_mount(E_DBus_Object *obj, DBusMessage *
 		}
 	}
 
-	_D("mount path : %s", path);
+	_I("mount path : %s", path);
 	ret = mmc_mount(mmc_curpath, path);
 
 error:
@@ -774,7 +851,7 @@ static DBusMessage *edbus_request_secure_unmount(E_DBus_Object *obj, DBusMessage
 		goto error;
 	}
 
-	_D("unmount path : %s", path);
+	_I("unmount path : %s", path);
 	ret = mmc_unmount(UNMOUNT_NORMAL, path);
 
 error:
@@ -896,6 +973,68 @@ error:
 	return reply;
 }
 
+static DBusMessage *edbus_request_insert(E_DBus_Object *obj, DBusMessage *msg)
+{
+	DBusMessageIter iter;
+	DBusMessage *reply;
+	char *devpath;
+	int ret;
+
+	ret = dbus_message_get_args(msg, NULL,
+			DBUS_TYPE_STRING, &devpath, DBUS_TYPE_INVALID);
+	if (!ret) {
+		_I("there is no message");
+		ret = -EBADMSG;
+		goto error;
+	}
+
+	ret = mmc_inserted(devpath);
+
+error:
+	reply = dbus_message_new_method_return(msg);
+	dbus_message_iter_init_append(reply, &iter);
+	dbus_message_iter_append_basic(&iter, DBUS_TYPE_INT32, &ret);
+	return reply;
+}
+
+static DBusMessage *edbus_request_remove(E_DBus_Object *obj, DBusMessage *msg)
+{
+	DBusMessageIter iter;
+	DBusMessage *reply;
+	int ret;
+
+	ret = mmc_removed();
+
+	reply = dbus_message_new_method_return(msg);
+	dbus_message_iter_init_append(reply, &iter);
+	dbus_message_iter_append_basic(&iter, DBUS_TYPE_INT32, &ret);
+	return reply;
+}
+
+static DBusMessage *edbus_change_status(E_DBus_Object *obj, DBusMessage *msg)
+{
+	DBusMessageIter iter;
+	DBusMessage *reply;
+	int opt, ret;
+	char params[NAME_MAX];
+	struct mmc_data *pdata;
+
+	ret = dbus_message_get_args(msg, NULL,
+			DBUS_TYPE_INT32, &opt, DBUS_TYPE_INVALID);
+	if (!ret) {
+		_I("there is no message");
+		ret = -EBADMSG;
+		goto error;
+	}
+	if (opt == VCONFKEY_SYSMAN_MMC_MOUNTED)
+		mmc_mount_done();
+error:
+	reply = dbus_message_new_method_return(msg);
+	dbus_message_iter_init_append(reply, &iter);
+	dbus_message_iter_append_basic(&iter, DBUS_TYPE_INT32, &ret);
+	return reply;
+}
+
 int get_mmc_devpath(char devpath[])
 {
 	if (mmc_disabled)
@@ -912,6 +1051,9 @@ static const struct edbus_method edbus_methods[] = {
 	{ "RequestMount",         NULL, "i", edbus_request_mount },
 	{ "RequestUnmount",        "i", "i", edbus_request_unmount },
 	{ "RequestFormat",         "i", "i", edbus_request_format },
+	{ "RequestInsert",         "s", "i", edbus_request_insert },
+	{ "RequestRemove",        NULL, "i", edbus_request_remove },
+	{ "ChangeStatus",          "i", "i", edbus_change_status },
 };
 
 static int mmc_poweroff(void *data)
@@ -951,18 +1093,18 @@ static void mmc_exit(void *data)
 	mmc_uevent_stop();
 }
 
-static int mmc_start(void)
+static int mmc_start(enum device_flags flags)
 {
 	mmc_disabled = false;
-	_D("start");
+	_I("start");
 	return 0;
 }
 
-static int mmc_stop(void)
+static int mmc_stop(enum device_flags flags)
 {
 	mmc_disabled = true;
 	vconf_set_int(VCONFKEY_SYSMAN_MMC_STATUS, VCONFKEY_SYSMAN_MMC_REMOVED);
-	_D("stop");
+	_I("stop");
 	return 0;
 }
 

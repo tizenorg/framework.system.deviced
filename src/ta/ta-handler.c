@@ -21,7 +21,6 @@
 #include <device-node.h>
 
 #include "core/log.h"
-#include "core/data.h"
 #include "core/devices.h"
 #include "display/poll.h"
 #include "core/common.h"

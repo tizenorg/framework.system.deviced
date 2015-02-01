@@ -25,6 +25,7 @@
 #define __DEVICE_INTERFACE_H__
 
 #include <stdbool.h>
+#include "core/devices.h"
 
 #define FLAG_X_DPMS		0x2
 
@@ -57,11 +58,11 @@ extern int init_sysfs(unsigned int);
 extern int exit_sysfs(void);
 
 struct _backlight_ops {
-	int (*off)(void);
+	int (*off)(enum device_flags);
 	int (*dim)(void);
-	int (*on)(void);
+	int (*on)(enum device_flags);
 	int (*update)(void);
-	int (*standby)(void);
+	int (*standby)(int);
 	int (*hbm_off)(void);
 	int (*set_default_brt)(int level);
 	int (*get_lcd_power)(void);
@@ -70,13 +71,6 @@ struct _backlight_ops {
 	int (*save_custom_brightness)(void);
 	int (*custom_update)(void);
 	int (*set_force_brightness)(int level);
-};
-
-struct _touch_ops {
-	int (*screen_on)(void);
-	int (*screen_off)(void);
-	int (*key_on)(void);
-	int (*key_off)(void);
 };
 
 struct _power_ops {
@@ -90,7 +84,6 @@ struct _power_ops {
 };
 
 extern struct _backlight_ops backlight_ops;
-extern struct _touch_ops touch_ops;
 extern struct _power_ops power_ops;
 
 #endif

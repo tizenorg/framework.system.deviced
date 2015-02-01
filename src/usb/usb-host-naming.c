@@ -119,7 +119,7 @@ int verify_vendor_name(const char *vendor, char *buf, int len)
 
 	remove_non_alphabet(name);
 
-	change_to_short(name, strlen(name));
+	change_to_short(name, sizeof(name));
 
 	snprintf(buf, len, "%s", name);
 	return 0;
@@ -138,7 +138,7 @@ int verify_model_name(const char *model, char *vendor, char *buf, int len)
 
 	remove_non_alphabet(name);
 
-	change_to_short(name, strlen(name));
+	change_to_short(name, sizeof(name));
 
 	remove_vendor(name, vendor);
 

@@ -21,7 +21,6 @@
 
 
 #include "core/common.h"
-#include "core/data.h"
 
 enum ticker_type {
 	WITHOUT_QUEUE, /* for usb client */

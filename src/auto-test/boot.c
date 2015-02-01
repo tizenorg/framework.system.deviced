@@ -109,16 +109,21 @@ static int broadcast_edbus_signal(const char *path, const char *interface,
 		return -EPERM;
 	}
 
-	e_dbus_message_send(edbus_conn, msg, NULL, -1, NULL);
-
+	r = dbus_connection_send(conn, msg, NULL);
 	dbus_message_unref(msg);
+
+	if (r != TRUE) {
+		_E("dbus_connection_send error (%s:%s-%s)", path, interface, name);
+		return -ECOMM;
+	}
 	return 0;
 }
 
-static void poweroff_send_broadcast(char *status)
+static void poweroff_popup(char *status)
 {
 	char *arr[2];
 	char str_status[32];
+	int val;
 
 	snprintf(str_status, sizeof(str_status), "%s", status);
 	arr[0] = str_status;
@@ -126,8 +131,12 @@ static void poweroff_send_broadcast(char *status)
 	_D("broadcast poweroff %s %s", arr[0], arr[1]);
 
 	edbus_init();
-	broadcast_edbus_signal(DEVICED_OBJECT_PATH, DEVICED_INTERFACE_NAME,
+	val = broadcast_edbus_signal(DEVICED_OBJECT_PATH, DEVICED_INTERFACE_NAME,
 			"poweroffpopup", "si", arr);
+	if (val < 0)
+		_R("[NG] ---- %s", __func__);
+	else
+		_R("[OK] ---- %s   : V(%s)", __func__, status);
 	edbus_exit();
 }
 
@@ -140,7 +149,7 @@ static void unit(char *unit, char *status)
 		    strcmp(status, boot_control_types[index].status) != 0)
 			continue;
 		if (strcmp(unit, "poweroffpopup") == 0)
-			poweroff_send_broadcast(boot_control_types[index].status);
+			poweroff_popup(boot_control_types[index].status);
 	}
 
 }

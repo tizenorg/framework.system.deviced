@@ -30,8 +30,6 @@
 #include <vconf-keys.h>
 #include <fcntl.h>
 
-#include "core/data.h"
-#include "core/queue.h"
 #include "core/log.h"
 #include "core/common.h"
 #include "core/devices.h"
@@ -39,6 +37,10 @@
 #include "display/enhance.h"
 #include "proc-handler.h"
 #include "core/edbus-handler.h"
+
+#define TEMPERATURE_DBUS_INTERFACE	"org.tizen.trm.siop"
+#define TEMPERATURE_DBUS_PATH		"/Org/Tizen/Trm/Siop"
+#define TEMPERATURE_DBUS_SIGNAL		"ChangedTemperature"
 
 #define LIMITED_PROCESS_OOMADJ 15
 
@@ -72,6 +74,11 @@
 enum SIOP_DOMAIN_TYPE {
 	SIOP_NEGATIVE = -1,
 	SIOP_POSITIVE = 1,
+};
+
+struct siop_data {
+	int siop;
+	int rear;
 };
 
 static int siop = 0;
@@ -197,9 +204,6 @@ static void siop_level_action(int level)
 
 static int siop_changed(int argc, char **argv)
 {
-#ifdef MICRO_DD
-	return 0;
-#else
 	int siop_level = 0;
 	int rear_level = 0;
 	int level;
@@ -238,7 +242,6 @@ out:
 	level = SIOP_CTRL_VALUE(siop_level, rear_level);
 	siop_level_action(level);
 	return 0;
-#endif
 }
 
 static int siop_mode_lcd(keynode_t *key_nodes, void *data)
@@ -720,7 +723,6 @@ static void dbus_proc_oomadj_set_signal_handler(void *data, DBusMessage *msg)
 		_E("set_process_action error!");
 }
 
-
 static const struct edbus_method edbus_methods[] = {
 	{ PREDEF_FOREGRD, "sis", "i", dbus_proc_handler },
 	{ PREDEF_BACKGRD, "sis", "i", dbus_proc_handler },
@@ -735,12 +737,78 @@ static const struct edbus_method edbus_methods[] = {
 
 static int proc_booting_done(void *data)
 {
-	register_action(SIOP_CHANGED, siop_changed, NULL, NULL);
+	static int done = 0;
+
+	if (data == NULL)
+		goto out;
+	done = (int)data;
 	if (vconf_notify_key_changed(VCONFKEY_PM_STATE, (void *)siop_mode_lcd, NULL) < 0)
 		_E("Vconf notify key chaneged failed: KEY(%s)", VCONFKEY_PM_STATE);
 	siop_mode_lcd(NULL, NULL);
+out:
+	return done;
+}
+
+static int process_execute(void *data)
+{
+	struct siop_data* key_data = (struct siop_data *)data;
+	int siop_level = 0;
+	int rear_level = 0;
+	int level;
+	int siop_disable;
+	int ret;
+	int booting_done;
+
+	booting_done = proc_booting_done(NULL);
+	if (!booting_done)
+		return 0;
+
+	if (key_data == NULL)
+		goto out;
+
+	level = key_data->siop;
+	device_set_property(DEVICE_TYPE_DISPLAY, PROP_DISPLAY_ELVSS_CONTROL, level);
+	ret = device_get_property(DEVICE_TYPE_POWER, PROP_POWER_SIOP_LEVEL, &level);
+	if (ret != 0)
+		goto check_rear;
+
+	if (level <= SIOP_NEGATIVE)
+		siop_domain = SIOP_NEGATIVE;
+	else
+		siop_domain = SIOP_POSITIVE;
+	siop_level = siop_domain * level;
+
+check_rear:
+	level = key_data->rear;
+	if (device_get_property(DEVICE_TYPE_POWER, PROP_POWER_REAR_LEVEL, &level) == 0)
+		rear_level = level;
+
+out:
+	level = SIOP_CTRL_VALUE(siop_level, rear_level);
+	siop_level_action(level);
 	return 0;
 }
+
+static void temp_change_signal_handler(void *data, DBusMessage *msg)
+{
+	DBusError err;
+	int level = 0;
+
+	if (dbus_message_is_signal(msg, TEMPERATURE_DBUS_INTERFACE, TEMPERATURE_DBUS_SIGNAL) == 0) {
+		_E("there is no cool down signal");
+		return;
+	}
+
+	dbus_error_init(&err);
+
+	if (dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &level, DBUS_TYPE_INVALID) == 0) {
+		_E("there is no message");
+		return;
+	}
+	_D("%d", level);
+	device_set_property(DEVICE_TYPE_DISPLAY, PROP_DISPLAY_ELVSS_CONTROL, level);
+}
+
 static void process_init(void *data)
 {
 	int ret;
@@ -748,25 +816,22 @@ static void process_init(void *data)
 	register_edbus_signal_handler(DEVICED_PATH_PROCESS, DEVICED_INTERFACE_PROCESS,
 			SIGNAL_NAME_OOMADJ_SET,
 		    dbus_proc_oomadj_set_signal_handler);
+	register_edbus_signal_handler(TEMPERATURE_DBUS_PATH, TEMPERATURE_DBUS_INTERFACE,
+			TEMPERATURE_DBUS_SIGNAL,
+		    temp_change_signal_handler);
 
 	ret = register_edbus_method(DEVICED_PATH_PROCESS, edbus_methods, ARRAY_SIZE(edbus_methods));
 	if (ret < 0)
 		_E("fail to init edbus method(%d)", ret);
-
-	register_action(PREDEF_FOREGRD, set_process_action, NULL, NULL);
-	register_action(PREDEF_BACKGRD, set_process_action, NULL, NULL);
-	register_action(PREDEF_ACTIVE, set_active_action, NULL, NULL);
-	register_action(PREDEF_INACTIVE, set_inactive_action, NULL, NULL);
-	register_action(OOMADJ_SET, set_oom_score_adj_action, NULL, NULL);
-	register_action(PROCESS_GROUP_SET, set_process_group_action, NULL, NULL);
 
 	register_notifier(DEVICE_NOTIFIER_BOOTING_DONE, proc_booting_done);
 }
 
 static const struct device_ops process_device_ops = {
 	.priority = DEVICE_PRIORITY_NORMAL,
-	.name     = "process",
+	.name     = PROC_OPS_NAME,
 	.init     = process_init,
+	.execute  = process_execute,
 };
 
 DEVICE_OPS_REGISTER(&process_device_ops)

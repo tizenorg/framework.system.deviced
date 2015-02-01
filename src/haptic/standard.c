@@ -31,9 +31,9 @@
 #include <Ecore.h>
 
 #include "core/log.h"
+#include "core/list.h"
 #include "haptic.h"
 
-#define DEFAULT_HAPTIC_HANDLE	0xFFFF
 #define MAX_MAGNITUDE			0xFFFF
 #define PERIODIC_MAX_MAGNITUDE	0x7FFF	/* 0.5 * MAX_MAGNITUDE */
 
@@ -46,43 +46,65 @@
 #define LONG(x) ((x)/BITS_PER_LONG)
 #define test_bit(bit, array)    ((array[LONG(bit)] >> OFF(bit)) & 1)
 
-static struct ff_effect ff_effect;
-static char ff_path[PATH_MAX];
-static int ff_use_count;
-static int ff_fd;
-static Ecore_Timer *timer;
 
-static int ff_stop(int fd);
+struct ff_info {
+	Ecore_Timer *timer;
+	struct ff_effect effect;
+};
+
+static int ff_fd;
+static dd_list *ff_list;
+static char ff_path[PATH_MAX];
+
+/* for debug */
+static void print_list(void)
+{
+	struct ff_info *temp;
+	dd_list *elem;
+	int i = 0;
+
+	DD_LIST_FOREACH(ff_list, elem, temp)
+		_D("[%d] %x", i++, temp);
+}
+
+static bool check_valid_handle(struct ff_info *info)
+{
+	struct ff_info *temp;
+	dd_list *elem;
+
+	DD_LIST_FOREACH(ff_list, elem, temp) {
+		if (temp == info)
+			break;
+	}
+
+	if (!temp)
+		return false;
+	return true;
+}
+
+static int ff_stop(int fd, struct ff_effect *effect);
 static Eina_Bool timer_cb(void *data)
 {
+	struct ff_info *info = (struct ff_info*)data;
+
+	if (!info)
+		return ECORE_CALLBACK_CANCEL;
+
+	if (!check_valid_handle(info))
+		return ECORE_CALLBACK_CANCEL;
+
+	_I("stop vibration by timer : id(%d)", info->effect.id);
+
 	/* stop previous vibration */
-	ff_stop(ff_fd);
-	_I("stop vibration by timer");
+	ff_stop(ff_fd, &info->effect);
+
+	/* reset timer */
+	info->timer = NULL;
 
 	return ECORE_CALLBACK_CANCEL;
 }
 
-static int register_timer(int ms)
-{
-	/* add new timer */
-	timer = ecore_timer_add(ms/1000.f, timer_cb, NULL);
-	if (!timer)
-		return -EPERM;
-
-	return 0;
-}
-
-static int unregister_timer(void)
-{
-	if (timer) {
-		ecore_timer_del(timer);
-		timer = NULL;
-	}
-
-	return 0;
-}
-
-static int ff_find_device(char *path, int size)
+static int ff_find_device(void)
 {
 	DIR *dir;
 	struct dirent *dent;
@@ -138,78 +160,94 @@ static int ff_find_device(char *path, int size)
 	return -1;
 }
 
-static int ff_play(int fd, int length, int level)
+static int ff_init_effect(struct ff_effect *effect)
 {
-	struct input_event play;
-	int r = 0;
-	double magnitude;
-
-	if (fd < 0)
+	if (!effect)
 		return -EINVAL;
 
-	/* unregister existing timer */
-	unregister_timer();
+	/* initialize member variables in effect struct */
+	effect->type = FF_PERIODIC;
+	effect->id = -1;
+	effect->u.periodic.waveform = FF_SQUARE;
+	effect->u.periodic.period = 0.1*0x100;	/* 0.1 second */
+	effect->u.periodic.magnitude = 0;	/* temporary value */
+	effect->u.periodic.offset = 0;
+	effect->u.periodic.phase = 0;
+	effect->direction = 0x4000;	/* Along X axis */
+	effect->u.periodic.envelope.attack_length = 0;
+	effect->u.periodic.envelope.attack_level = 0;
+	effect->u.periodic.envelope.fade_length = 0;
+	effect->u.periodic.envelope.fade_level = 0;
+	effect->trigger.button = 0;
+	effect->trigger.interval = 0;
+	effect->replay.length = 0;		/* temporary value */
+	effect->replay.delay = 0;
+
+	return 0;
+}
+
+static int ff_set_effect(struct ff_effect *effect, int length, int level)
+{
+	double magnitude;
+
+	if (!effect)
+		return -EINVAL;
 
 	magnitude = (double)level/HAPTIC_MODULE_FEEDBACK_MAX;
 	magnitude *= PERIODIC_MAX_MAGNITUDE;
 
 	_I("info : magnitude(%d) length(%d)", (int)magnitude, length);
 
-	/* Set member variables in effect struct */
-	ff_effect.type = FF_PERIODIC;
-	if (!ff_effect.id)
-		ff_effect.id = -1;
-	ff_effect.u.periodic.waveform = FF_SQUARE;
-	ff_effect.u.periodic.period = 0.1*0x100;	/* 0.1 second */
-	ff_effect.u.periodic.magnitude = (int)magnitude;
-	ff_effect.u.periodic.offset = 0;
-	ff_effect.u.periodic.phase = 0;
-	ff_effect.direction = 0x4000;	/* Along X axis */
-	ff_effect.u.periodic.envelope.attack_length = 0;
-	ff_effect.u.periodic.envelope.attack_level = 0;
-	ff_effect.u.periodic.envelope.fade_length = 0;
-	ff_effect.u.periodic.envelope.fade_level = 0;
-	ff_effect.trigger.button = 0;
-	ff_effect.trigger.interval = 0;
-	ff_effect.replay.length = length;
-	ff_effect.replay.delay = 0;
+	/* set member variables in effect struct */
+	effect->u.periodic.magnitude = (int)magnitude;
+	effect->replay.length = length;		/* length millisecond */
 
-	if (ioctl(fd, EVIOCSFF, &ff_effect) == -1) {
-		/* workaround: if effect is erased, try one more */
-		ff_effect.id = -1;
-		if (ioctl(fd, EVIOCSFF, &ff_effect) == -1)
-			return -errno;
-	}
+	return 0;
+}
 
-	/* Play vibration*/
+static int ff_play(int fd, struct ff_effect *effect)
+{
+	struct input_event play;
+
+	if (fd < 0 || !effect)
+		return -EINVAL;
+
+	/* upload an effect */
+	if (ioctl(fd, EVIOCSFF, effect) == -1)
+		return -errno;
+
+	/* play vibration*/
 	play.type = EV_FF;
-	play.code = ff_effect.id;
+	play.code = effect->id;
 	play.value = 1; /* 1 : PLAY, 0 : STOP */
 
 	if (write(fd, (const void*)&play, sizeof(play)) == -1)
 		return -errno;
 
-	/* register timer */
-	register_timer(length);
-
 	return 0;
 }
 
-static int ff_stop(int fd)
+static int ff_stop(int fd, struct ff_effect *effect)
 {
 	struct input_event stop;
-	int r = 0;
 
 	if (fd < 0)
 		return -EINVAL;
 
 	/* Stop vibration */
 	stop.type = EV_FF;
-	stop.code = ff_effect.id;
-	stop.value = 0;
+	stop.code = effect->id;
+	stop.value = 0; /* 1 : PLAY, 0 : STOP */
 
 	if (write(fd, (const void*)&stop, sizeof(stop)) == -1)
 		return -errno;
+
+	/* removing an effect from the device */
+	if (ioctl(fd, EVIOCRMFF, effect->id) == -1)
+		return -errno;
+
+	/* reset effect id */
+	effect->id = -1;
 
 	return 0;
 }
@@ -217,6 +255,7 @@ static int ff_stop(int fd)
 /* START: Haptic Module APIs */
 static int get_device_count(int *count)
 {
+	/* suppose there is just one haptic device */
 	if (count)
 		*count = 1;
 
@@ -225,8 +264,17 @@ static int get_device_count(int *count)
 
 static int open_device(int device_index, int *device_handle)
 {
-	/* open ff driver */
-	if (ff_use_count == 0) {
+	struct ff_info *info;
+	int n;
+
+	if (!device_handle)
+		return -EINVAL;
+
+	/* if it is the first element */
+	n = DD_LIST_LENGTH(ff_list);
+	if (n == 0 && !ff_fd) {
+		_I("First element: open ff driver");
+		/* open ff driver */
 		ff_fd = open(ff_path, O_RDWR);
 		if (!ff_fd) {
 			_E("Failed to open %s : %s", ff_path, strerror(errno));
@@ -234,34 +282,56 @@ static int open_device(int device_index, int *device_handle)
 		}
 	}
 
-	/* Increase handle count */
-	ff_use_count++;
+	/* allocate memory */
+	info = calloc(sizeof(struct ff_info), 1);
+	if (!info) {
+		_E("Failed to allocate memory : %s", strerror(errno));
+		return -errno;
+	}
 
-	if (device_handle)
-		*device_handle = DEFAULT_HAPTIC_HANDLE;
+	/* initialize ff_effect structure */
+	ff_init_effect(&info->effect);
 
+	/* add info to local list */
+	DD_LIST_APPEND(ff_list, info);
+
+	*device_handle = (int)info;
 	return 0;
 }
 
 static int close_device(int device_handle)
 {
-	if (device_handle != DEFAULT_HAPTIC_HANDLE)
+	struct ff_info *info = (struct ff_info*)device_handle;
+	int r, n;
+
+	if (!info)
 		return -EINVAL;
 
-	if (ff_use_count == 0)
-		return -EPERM;
+	if (!check_valid_handle(info))
+		return -EINVAL;
 
-	ff_stop(ff_fd);
+	/* stop vibration */
+	r = ff_stop(ff_fd, &info->effect);
+	if (r < 0)
+		_I("already stopped or failed to stop effect : %d", r);
 
-	/* Decrease handle count */
-	ff_use_count--;
+	/* unregister existing timer */
+	if (r >= 0 && info->timer) {
+		ecore_timer_del(info->timer);
+		info->timer = NULL;
+	}
 
-	/* close ff driver */
-	if (ff_use_count == 0) {
-		/* Initialize effect structure */
-		memset(&ff_effect, 0, sizeof(ff_effect));
+	/* remove info from local list */
+	DD_LIST_REMOVE(ff_list, info);
+	safe_free(info);
+
+	/* if it is the last element */
+	n = DD_LIST_LENGTH(ff_list);
+	if (n == 0 && ff_fd) {
+		_I("Last element: close ff driver");
+		/* close ff driver */
 		close(ff_fd);
-		ff_fd = -1;
+		ff_fd = 0;
 	}
 
 	return 0;
@@ -269,41 +339,104 @@ static int close_device(int device_handle)
 
 static int vibrate_monotone(int device_handle, int duration, int feedback, int priority, int *effect_handle)
 {
-	if (device_handle != DEFAULT_HAPTIC_HANDLE)
+	struct ff_info *info = (struct ff_info*)device_handle;
+	int ret;
+
+	if (!info)
 		return -EINVAL;
 
-	return ff_play(ff_fd, duration, feedback);
+	if (!check_valid_handle(info))
+		return -EINVAL;
+
+	/* Zero(0) is the infinitely vibration value */
+	if (duration == HAPTIC_MODULE_DURATION_UNLIMITED)
+		duration = 0;
+
+	/* set effect as per arguments */
+	ret = ff_set_effect(&info->effect, duration, feedback);
+	if (ret < 0) {
+		_E("failed to set effect(duration:%d, feedback:%d) : %d",
+				duration, feedback, ret);
+		return ret;
+	}
+
+	/* play effect as per arguments */
+	ret = ff_play(ff_fd, &info->effect);
+	if (ret < 0) {
+		_E("failed to play haptic effect(id:%d) : %d",
+				info->effect.id, ret);
+		return ret;
+	}
+
+	/* unregister existing timer */
+	if (info->timer) {
+		ecore_timer_del(info->timer);
+		info->timer = NULL;
+	}
+
+	/* register timer */
+	if (duration) {
+		info->timer = ecore_timer_add(duration/1000.f, timer_cb, info);
+		if (!info->timer)
+			_E("Failed to add timer callback");
+	}
+
+	_D("effect id : %d", info->effect.id);
+	if (effect_handle)
+		*effect_handle = info->effect.id;
+
+	return 0;
 }
 
 static int vibrate_buffer(int device_handle, const unsigned char *vibe_buffer, int iteration, int feedback, int priority, int *effect_handle)
 {
-	if (device_handle != DEFAULT_HAPTIC_HANDLE)
-		return -EINVAL;
-
 	/* temporary code */
-	return ff_play(ff_fd, 300, feedback);
+	return vibrate_monotone(device_handle, 300, feedback, priority, effect_handle);
 }
 
 static int stop_device(int device_handle)
 {
-	if (device_handle != DEFAULT_HAPTIC_HANDLE)
+	struct ff_info *info = (struct ff_info*)device_handle;
+	int r;
+
+	if (!info)
 		return -EINVAL;
 
-	return ff_stop(ff_fd);
+	if (!check_valid_handle(info))
+		return -EINVAL;
+
+	/* stop effect */
+	r = ff_stop(ff_fd, &info->effect);
+	if (r < 0)
+		_E("failed to stop effect(id:%d) : %d", info->effect.id, r);
+
+	/* unregister existing timer */
+	if (r >= 0 && info->timer) {
+		ecore_timer_del(info->timer);
+		info->timer = NULL;
+	}
+
+	return 0;
 }
 
 static int get_device_state(int device_index, int *effect_state)
 {
-	int status;
+	struct ff_info *info;
+	dd_list *elem;
+	int n, status = false;
 
-	if (ff_effect.id != 0)
-		status = 1;
-	else
-		status = 0;
+	if (!effect_state)
+		return -EINVAL;
 
-	if (effect_state)
-		*effect_state = status;
+	/* suppose there is just one haptic device */
+	DD_LIST_FOREACH(ff_list, elem, info) {
+		if (info->effect.id >= 0) {
+			status = true;
+			break;
+		}
+	}
 
+	*effect_state = status;
 	return 0;
 }
 
@@ -315,9 +448,6 @@ static int create_effect(unsigned char *vibe_buffer, int max_bufsize, haptic_mod
 
 static int get_buffer_duration(int device_handle, const unsigned char *vibe_buffer, int *buffer_duration)
 {
-	if (device_handle != DEFAULT_HAPTIC_HANDLE)
-		return -EINVAL;
-
 	_E("Not support feature");
 	return -EACCES;
 }
@@ -346,11 +476,13 @@ static bool is_valid(void)
 {
 	int ret;
 
-	ret = ff_find_device(ff_path, sizeof(ff_path));
-
-	if (ret < 0)
+	ret = ff_find_device();
+	if (ret < 0) {
+		_I("Do not support standard haptic device");
 		return false;
+	}
 
+	_I("Support standard haptic device");
 	return true;
 }
 
@@ -360,6 +492,7 @@ static const struct haptic_plugin_ops *load(void)
 }
 
 static const struct haptic_ops std_ops = {
+	.type     = HAPTIC_STANDARD,
 	.is_valid = is_valid,
 	.load     = load,
 };

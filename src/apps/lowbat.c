@@ -26,6 +26,13 @@
 #define LOWBAT_CRITICAL  "critical"
 #define LOWBAT_POWEROFF "poweroff"
 
+#define DBUS_POPUP_PATH_LOWBAT		POPUP_OBJECT_PATH"/Battery"
+#define DBUS_POPUP_INTERFACE_LOWBAT	POPUP_INTERFACE_NAME".Battery"
+
+#define METHOD_LOWBAT_POPUP		"BatteryLow"
+#define METHOD_LOWBAT_POPUP_DISABLE	"LowBatteryDisable"
+#define METHOD_LOWBAT_POPUP_ENABLE	"LowBatteryEnable"
+
 struct popup_data {
 	char *name;
 	char *key;
@@ -33,6 +40,7 @@ struct popup_data {
 };
 
 static int lowbat_pid = 0;
+static int lowbat_popup = APPS_ENABLE;
 
 static void lowbat_cb(void *data, DBusMessage *msg, DBusError *unused)
 {
@@ -57,16 +65,30 @@ static void lowbat_cb(void *data, DBusMessage *msg, DBusError *unused)
 static int lowbat_launch(void *data)
 {
 	char *param[2];
+	char *dest, *path, *iface, *method;
 	struct popup_data * key_data = (struct popup_data *)data;
 	int ret;
 
+	if (lowbat_popup == APPS_DISABLE) {
+		_D("skip lowbat popup control");
+		return 0;
+	}
+
 	param[0] = key_data->key;
 	param[1] = key_data->value;
-
-	ret = dbus_method_async_with_reply(POPUP_BUS_NAME,
-			POPUP_PATH_LOWBAT,
-			POPUP_INTERFACE_LOWBAT,
-			POPUP_METHOD_LAUNCH,
+	if (strncmp(key_data->value, "lowbattery_warning", 18) == 0 ||
+	    strncmp(key_data->value, "lowbattery_critical", 19) == 0) {
+		dest = POPUP_BUS_NAME;
+		path = DBUS_POPUP_PATH_LOWBAT;
+		iface = DBUS_POPUP_INTERFACE_LOWBAT;
+		method = METHOD_LOWBAT_POPUP;
+	} else {
+		dest = POPUP_BUS_NAME;
+		path = POPUP_PATH_LOWBAT;
+		iface = POPUP_INTERFACE_LOWBAT;
+		method = POPUP_METHOD_LAUNCH;
+	}
+	ret = dbus_method_async_with_reply(dest, path, iface, method,
 			"ss", param, lowbat_cb, -1, NULL);
 
 	if (strncmp(key_data->value, LOWBAT_WARNING, strlen(LOWBAT_WARNING)) &&
@@ -102,10 +124,48 @@ static int lowbat_terminate(void *data)
 	return 0;
 }
 
+static DBusMessage *dbus_disable_popup(E_DBus_Object *obj, DBusMessage *msg)
+{
+	DBusMessageIter iter;
+	DBusMessage *reply;
+
+	lowbat_popup = APPS_DISABLE;
+	reply = dbus_message_new_method_return(msg);
+	dbus_message_iter_init_append(reply, &iter);
+	dbus_message_iter_append_basic(&iter, DBUS_TYPE_INT32, &lowbat_popup);
+	return reply;
+}
+
+static DBusMessage *dbus_enable_popup(E_DBus_Object *obj, DBusMessage *msg)
+{
+	DBusMessageIter iter;
+	DBusMessage *reply;
+
+	lowbat_popup = APPS_ENABLE;
+	reply = dbus_message_new_method_return(msg);
+	dbus_message_iter_init_append(reply, &iter);
+	dbus_message_iter_append_basic(&iter, DBUS_TYPE_INT32, &lowbat_popup);
+	return reply;
+}
+
+static const struct edbus_method edbus_methods[] = {
+	{ METHOD_LOWBAT_POPUP_DISABLE,	NULL, "i", dbus_disable_popup },
+	{ METHOD_LOWBAT_POPUP_ENABLE,	NULL, "i", dbus_enable_popup },
+};
+
+static void lowbat_init(void)
+{
+	int ret;
+
+	ret = register_edbus_method(DEVICED_PATH_APPS, edbus_methods, ARRAY_SIZE(edbus_methods));
+	if (ret < 0)
+		_E("fail to init edbus method(%d)", ret);
+}
 
 static const struct apps_ops lowbat_ops = {
-	.name	= "lowbat-syspopup",
-	.launch	= lowbat_launch,
+	.name      = "lowbat-syspopup",
+	.init      = lowbat_init,
+	.launch    = lowbat_launch,
 	.terminate = lowbat_terminate,
 };
 

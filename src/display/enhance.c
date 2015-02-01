@@ -28,9 +28,7 @@
 #include <vconf.h>
 #include <vconf-keys.h>
 #include "core.h"
-#include "core/data.h"
 #include "core/devices.h"
-#include "core/queue.h"
 #include "core/log.h"
 #include "core/common.h"
 #include "proc/proc-handler.h"
@@ -49,6 +47,9 @@
 #define SETTING_NAME	"setting"
 #define CLUSTER_HOME	"cluster-home"
 #define BROWSER_NAME	"browser"
+
+#define SIGNAL_GLOVEMODE_ON	"GloveModeOn"
+#define SIGNAL_GLOVEMODE_OFF	"GloveModeOff"
 
 enum lcd_enhance_type{
 	ENHANCE_MODE = 0,
@@ -89,6 +90,12 @@ void switch_glove_key(int val)
 		else
 			_D("glove key mode is %s", (val ? "on" : "off"));
 	}
+}
+
+static void broadcast_glove_mode(int state)
+{
+	broadcast_edbus_signal(DEVICED_PATH_DISPLAY, DEVICED_INTERFACE_DISPLAY,
+	    (state ? SIGNAL_GLOVEMODE_ON : SIGNAL_GLOVEMODE_OFF), NULL, NULL);
 }
 
 static int check_default_process(int pid, char *default_name)
@@ -322,7 +329,7 @@ static int add_entry_to_enhance_ctl_list(int pid, int index, int val)
 	return 0;
 }
 
-static void enhance_control_pid_cb(keynode_t *in_key, struct main_data *ad)
+static void enhance_control_pid_cb(keynode_t *in_key, void *data)
 {
 	int pid;
 
@@ -335,7 +342,7 @@ static void enhance_control_pid_cb(keynode_t *in_key, struct main_data *ad)
 	restore_enhance_status(&default_enhance);
 }
 
-static void enhance_auto_control_cb(keynode_t *in_key, struct main_data *ad)
+static void enhance_auto_control_cb(keynode_t *in_key, void *data)
 {
 	int val;
 
@@ -631,6 +638,7 @@ static DBusMessage *edbus_setenhancedtouch(E_DBus_Object *obj, DBusMessage *msg)
 		_E("fail to set touch screen glove mode (%d)", val);
 		goto error;
 	}
+	broadcast_glove_mode(val);
 
 error:
 	reply = dbus_message_new_method_return(msg);

@@ -26,14 +26,18 @@
 #include <sys/types.h>
 #include <fcntl.h>
 #include <vconf.h>
-#include <sensor.h>
+#include <sensor_internal.h>
 #include <Ecore.h>
 
 #include "util.h"
 #include "core.h"
 #include "display-ops.h"
 #include "device-node.h"
+#include "weaks.h"
+#include "hbm.h"
 #include "proc/proc-handler.h"
+#include "core/device-notifier.h"
+#include "core/config-parser.h"
 
 #define DISP_FORCE_SHIFT	12
 #define DISP_FORCE_CMD(prop, force)	(((force) << DISP_FORCE_SHIFT) | prop)
@@ -45,7 +49,6 @@
 #define MAX_AUTOMATIC_COUNT	11
 #define AUTOMATIC_DEVIDE_VAL	10
 #define AUTOMATIC_DELAY_TIME	0.5	/* 0.5 sec */
-#define MAX_NORMAL_LUX		10000
 
 #define RADIAN_VALUE 		(57.2957)
 #define ROTATION_90		90
@@ -53,6 +56,26 @@
 #define WORKING_ANGLE_MAX	20
 
 #define ISVALID_AUTOMATIC_INDEX(index) (index >= 0 && index < MAX_AUTOMATIC_COUNT)
+#define BOARD_CONF_FILE "/etc/deviced/display.conf"
+
+#define ON_LUX		-1
+#define OFF_LUX		-1
+#define ON_COUNT	1
+#define OFF_COUNT	1
+
+struct lbm_config {
+	int on;
+	int off;
+	int on_count;
+	int off_count;
+};
+
+struct lbm_config lbm_conf = {
+	.on		= ON_LUX,
+	.off		= OFF_LUX,
+	.on_count	= ON_COUNT,
+	.off_count	= OFF_COUNT,
+};
 
 static int (*_default_action) (int);
 static Ecore_Timer *alc_timeout_id = 0;
@@ -63,14 +86,17 @@ static int fault_count = 0;
 static int automatic_brt = DEFAULT_AUTOMATIC_BRT;
 static int min_brightness = PM_MIN_BRIGHTNESS;
 static char *min_brightness_name = 0;
-static int last_autobrightness = 0;
 static int value_table[MAX_AUTOMATIC_COUNT];
+static int lbm_state = -1;
 
 static bool update_working_position(void)
 {
 	sensor_data_t data;
 	int ret;
 	float x, y, z, pitch, realg;
+
+	if (!display_conf.accel_sensor_on)
+		return false;
 
 	ret = sf_get_data(accel_handle, ACCELEROMETER_BASE_DATA_SET, &data);
 	if (ret < 0) {
@@ -122,7 +148,8 @@ static void alc_set_brightness(int setting, int value, int lux)
 		value = get_siop_brightness(value);
 
 	if (tmp_value != value) {
-		if (!setting && min_brightness == PM_MIN_BRIGHTNESS) {
+		if (!setting && min_brightness == PM_MIN_BRIGHTNESS &&
+		    display_conf.accel_sensor_on == true) {
 			position = update_working_position();
 			if (!position && (old > lux)) {
 				_D("It's not working position, "
@@ -150,7 +177,6 @@ static void alc_set_brightness(int setting, int value, int lux)
 
 			backlight_ops.set_default_brt(tmp_value);
 			backlight_ops.update();
-			last_autobrightness = tmp_value;
 		}
 		_I("load light data:%d lux,auto brt %d,min brightness %d,"
 		    "brightness %d", lux, automatic_brt, min_brightness, value);
@@ -158,10 +184,52 @@ static void alc_set_brightness(int setting, int value, int lux)
 	}
 }
 
+static bool check_lbm(int lux, int setting)
+{
+	static int on_count, off_count;
+
+	if (lux < 0)
+		return false;
+
+	if (lbm_conf.on < 0 || lbm_conf.off < 0)
+		return true;
+
+	if (lux <= lbm_conf.on && lbm_state != true) {
+		off_count = 0;
+		on_count++;
+		if (on_count >= lbm_conf.on_count || setting) {
+			on_count = 0;
+			lbm_state = true;
+			_D("LBM is on");
+			return true;
+		}
+	} else if (lux >= lbm_conf.off && lbm_state != false) {
+		on_count = 0;
+		off_count++;
+		if (off_count >= lbm_conf.off_count || setting) {
+			off_count = 0;
+			lbm_state = false;
+			_D("LBM is off");
+			return true;
+		}
+	} else if (lux > lbm_conf.on && lux < lbm_conf.off) {
+		off_count = 0;
+		on_count = 0;
+	}
+
+	if (setting)
+		return true;
+
+	return false;
+}
+
 static bool check_brightness_changed(int value)
 {
 	int i;
 	static int values[MAX_SAMPLING_COUNT], count = 0;
+
+	if (!get_hallic_open())
+		return false;
 
 	if (count >= MAX_SAMPLING_COUNT || count < 0)
 		count = 0;
@@ -174,63 +242,38 @@ static bool check_brightness_changed(int value)
 	return true;
 }
 
-static void set_brightness_direct(void)
-{
-	int ret, cmd, value;
-	sensor_data_t light_data;
-
-	if (pm_cur_state != S_NORMAL || !get_hallic_open())
-		return;
-
-	/* direct update if it's previous value */
-	if (last_autobrightness > 0) {
-		backlight_ops.set_default_brt(last_autobrightness);
-		backlight_ops.update();
-		return;
-	}
-
-	/* get lux value from light sensor */
-	ret = sf_get_data(light_handle, LIGHT_LUX_DATA_SET, &light_data);
-	if (ret < 0 || (int)light_data.values[0] < 0)
-		return;
-
-	/* get brightness by lux */
-	cmd = DISP_FORCE_CMD(PROP_DISPLAY_BRIGHTNESS_BY_LUX, true);
-	cmd = DISP_CMD(cmd, (int)light_data.values[0]);
-	ret = device_get_property(DEVICE_TYPE_DISPLAY, cmd, value_table);
-	if (ret < 0)
-		return;
-
-	/* get auto brightness level from value table*/
-	value = (ISVALID_AUTOMATIC_INDEX(automatic_brt) ?
-	    value_table[automatic_brt] : value_table[DEFAULT_AUTOMATIC_BRT]);
-
-	/* update brightness actually */
-	backlight_ops.set_default_brt(value);
-	backlight_ops.update();
-	last_autobrightness = value;
-}
-
 static bool check_hbm(int lux)
 {
 	int ret, old_state, new_state;
+	static int on_count, off_count;
 
-	ret = device_get_property(DEVICE_TYPE_DISPLAY,
-	    PROP_DISPLAY_HBM_CONTROL, &old_state);
-	if (ret < 0) {
+	if (hbm_get_state == NULL)
+		return false;
+
+	old_state = hbm_get_state();
+	if (old_state < 0) {
 		_E("Failed to get HBM state!");
 		return false;
 	}
 
-	if (old_state)
-		new_state = (lux <= MAX_NORMAL_LUX ? 0 : 1);
-	else
-		new_state = (lux >= display_conf.hbm_lux_threshold ? 1 : 0);
+	if (old_state) {
+		if (lux <= hbm_conf.off)
+			off_count++;
+		else
+			off_count = 0;
+		new_state = (off_count >= hbm_conf.off_count ? 0 : 1);
+	} else {
+		if (lux >= hbm_conf.on)
+			on_count++;
+		else
+			on_count = 0;
+		new_state = (on_count >= hbm_conf.on_count ? 1 : 0);
+	}
 
 	if (old_state != new_state) {
+		on_count = off_count = 0;
 		_D("hbm is %s", (new_state ? "on" : "off"));
-		ret = device_set_property(DEVICE_TYPE_DISPLAY,
-		    PROP_DISPLAY_HBM_CONTROL, new_state);
+		ret = hbm_set_state(new_state);
 		if (ret < 0)
 			_E("Failed to set HBM state!");
 		/*
@@ -238,7 +281,7 @@ static bool check_hbm(int lux)
 		 * when hbm state is changed from on to off
 		 */
 		if (!new_state)
-			set_brightness_direct();
+			display_info.update_auto_brightness(true);
 	}
 
 	return (new_state ? true : false);
@@ -276,7 +319,11 @@ static bool alc_update_brt(bool setting)
 			if (check_hbm((int)light_data.values[0]))
 				return EINA_TRUE;
 
-			if (!check_brightness_changed(value) && !setting)
+			if (!check_lbm((int)light_data.values[0], setting))
+				return EINA_TRUE;
+
+			if (display_conf.continuous_sampling &&
+			    !check_brightness_changed(value) && !setting)
 				return EINA_TRUE;
 
 			alc_set_brightness(setting, value, (int)light_data.values[0]);
@@ -350,6 +397,11 @@ static int connect_sfsvc(void)
 		light_handle = -1;
 		goto error;
 	}
+	sf_change_sensor_option(light_handle, 1);
+
+	if (!display_conf.accel_sensor_on)
+		goto success;
+
 	/* accelerometer sensor */
 	accel_handle = sf_connect(ACCELEROMETER_SENSOR);
 	if (accel_handle < 0) {
@@ -363,7 +415,9 @@ static int connect_sfsvc(void)
 		accel_handle = -1;
 		goto error;
 	}
+	sf_change_sensor_option(accel_handle, 1);
 
+success:
 	fault_count = 0;
 	return 0;
 
@@ -373,7 +427,7 @@ error:
 		sf_disconnect(light_handle);
 		light_handle = -1;
 	}
-	if (accel_handle >= 0) {
+	if (display_conf.accel_sensor_on && accel_handle >= 0) {
 		sf_stop(accel_handle);
 		sf_disconnect(accel_handle);
 		accel_handle = -1;
@@ -391,7 +445,7 @@ static int disconnect_sfsvc(void)
 		light_handle = -1;
 	}
 	/* accelerometer sensor*/
-	if(accel_handle >= 0) {
+	if (display_conf.accel_sensor_on && accel_handle >= 0) {
 		sf_stop(accel_handle);
 		sf_disconnect(accel_handle);
 		accel_handle = -1;
@@ -438,7 +492,8 @@ static int set_autobrightness_state(int status)
 			_default_action = states[S_NORMAL].action;
 		states[S_NORMAL].action = alc_action;
 
-		set_brightness_direct();
+		display_info.update_auto_brightness(true);
+
 		alc_timeout_id =
 		    ecore_timer_add(display_conf.lightsensor_interval,
 			    (Ecore_Task_Cb)alc_handler, NULL);
@@ -446,9 +501,11 @@ static int set_autobrightness_state(int status)
 		_I("auto brightness paused!");
 		disconnect_sfsvc();
 		backlight_ops.hbm_off();
+		lbm_state = 0;
 	} else {
 		disconnect_sfsvc();
 		backlight_ops.hbm_off();
+		lbm_state = 0;
 		/* escape dim state if it's in low battery.*/
 		set_brtch_state();
 
@@ -549,10 +606,7 @@ static Eina_Bool update_handler(void* data)
 		return EINA_FALSE;
 
 	_D("auto brightness is working!");
-
-	sf_change_sensor_option(light_handle, 1);
 	alc_update_brt(true);
-	sf_change_sensor_option(light_handle, 0);
 
 	return EINA_FALSE;
 }
@@ -599,7 +653,7 @@ static int prepare_lsensor(void *data)
 	return 0;
 }
 
-static inline void update_brightness_direct(void)
+static void update_brightness_direct(void)
 {
 	int ret, status;
 
@@ -656,11 +710,62 @@ static int reset_autobrightness_min(char *name, enum watch_id id)
 	return 0;
 }
 
+static int lcd_changed_cb(void *data)
+{
+	int lcd_state = (int)data;
+
+	if (lcd_state == S_LCDOFF && alc_timeout_id > 0) {
+		ecore_timer_del(alc_timeout_id);
+		alc_timeout_id = NULL;
+	}
+
+	return 0;
+}
+
+static int lbm_load_config(struct parse_result *result, void *user_data)
+{
+	struct lbm_config *c = user_data;
+
+	_D("%s,%s,%s", result->section, result->name, result->value);
+
+	if (!c)
+		return -EINVAL;
+
+	if (!MATCH(result->section, "LBM"))
+		return 0;
+
+	if (MATCH(result->name, "on")) {
+		SET_CONF(c->on, atoi(result->value));
+		_D("on lux is %d", c->on);
+	} else if (MATCH(result->name, "off")) {
+		SET_CONF(c->off, atoi(result->value));
+		_D("off lux is %d", c->off);
+	} else if (MATCH(result->name, "on_count")) {
+		SET_CONF(c->on_count, atoi(result->value));
+		_D("on count is %d", c->on_count);
+	} else if (MATCH(result->name, "off_count")) {
+		SET_CONF(c->off_count, atoi(result->value));
+		_D("off count is %d", c->off_count);
+	}
+
+	return 0;
+}
+
 static void auto_brightness_init(void *data)
 {
+	int ret;
+
 	display_info.update_auto_brightness = update_auto_brightness;
 	display_info.set_autobrightness_min = set_autobrightness_min;
 	display_info.reset_autobrightness_min = reset_autobrightness_min;
+
+	/* load configutation */
+	ret = config_parse(BOARD_CONF_FILE, lbm_load_config, &lbm_conf);
+	if (ret < 0)
+		_W("Failed to load %s, %s Use default value!",
+		    BOARD_CONF_FILE, ret);
+
+	register_notifier(DEVICE_NOTIFIER_LCD, lcd_changed_cb);
 
 	prepare_lsensor(NULL);
 }
@@ -672,6 +777,8 @@ static void auto_brightness_exit(void *data)
 
 	vconf_ignore_key_changed(VCONFKEY_SETAPPL_LCD_AUTOMATIC_BRIGHTNESS,
 	    set_alc_automatic_brt);
+
+	unregister_notifier(DEVICE_NOTIFIER_LCD, lcd_changed_cb);
 
 	set_autobrightness_state(SETTING_BRIGHTNESS_AUTOMATIC_OFF);
 }

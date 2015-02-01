@@ -28,6 +28,4 @@
 #define HALL_IC_PATH "/devices/virtual/"HALL_IC_SUBSYSTEM"/"HALL_IC_NAME
 #define HALL_IC_STATUS "/sys/class/"HALL_IC_SUBSYSTEM"/"HALL_IC_NAME"/cover_status"
 
-#define PREDEF_HALL_IC HALL_IC_NAME
-
 #endif //__HALL_HANDLER_H__

@@ -21,9 +21,6 @@
 #include <TelPower.h>
 #include <tapi_event.h>
 #include <tapi_common.h>
-#include <TapiCommon.h>
-#include <TapiEvent.h>
-#include <ITapiProductivity.h>
 
 #include <unistd.h>
 #include <assert.h>
@@ -32,9 +29,6 @@
 #include <device-node.h>
 #include "dd-deviced.h"
 #include "core/log.h"
-#include "core/queue.h"
-#include "core/predefine.h"
-#include "core/data.h"
 #include "core/common.h"
 #include "core/devices.h"
 #include "core/edbus-handler.h"
@@ -91,7 +85,7 @@ static Eina_Bool telephony_powerdown_ap_by_force(void *data)
 	return EINA_TRUE;
 }
 
-static int telephony_start(void)
+static int telephony_start(enum device_flags flags)
 {
 	int ready = 0;
 
@@ -111,10 +105,14 @@ static int telephony_start(void)
 	return 0;
 }
 
-static int telephony_stop(void)
+static int telephony_stop(enum device_flags flags)
 {
 	int ret;
-	tel_deregister_noti_event(tapi_handle, TAPI_NOTI_MODEM_POWER);
+
+	ret = tel_deregister_noti_event(tapi_handle, TAPI_NOTI_MODEM_POWER);
+	if (ret != TAPI_API_SUCCESS)
+		_E("tel_deregister_noti_event is not subscribed. error %d", ret);
+
 	ret = tel_deinit(tapi_handle);
 	if (ret != 0) {
 		_E("fail to deinit");
@@ -133,7 +131,7 @@ static void telephony_exit(void *data)
 		return;
 	}
 
-	if (!strncmp(data, PREDEF_POWEROFF, strlen(PREDEF_POWEROFF))) {
+	if (!strncmp(data, POWER_POWEROFF, POWER_POWEROFF_LEN)) {
 		_I("Terminate");
 		ret = tel_register_noti_event(tapi_handle, TAPI_NOTI_MODEM_POWER,
 				telephony_powerdown_ap, NULL);
@@ -154,19 +152,19 @@ static void telephony_exit(void *data)
 		return;
 	}
 
-	if (strncmp(data, PREDEF_REBOOT, strlen(PREDEF_REBOOT)) &&
-	    strncmp(data, PREDEF_RECOVERY, strlen(PREDEF_RECOVERY)) &&
-	    strncmp(data, PREDEF_FOTA_REBOOT, strlen(PREDEF_FOTA_REBOOT))) {
+	if (strncmp(data, POWER_REBOOT, POWER_REBOOT_LEN) &&
+	    strncmp(data, POWER_RECOVERY, POWER_RECOVERY_LEN) &&
+	    strncmp(data, POWER_FOTA, POWER_FOTA_LEN)) {
 		_E("Fail %s", data);
 		return;
 	}
 
 	_I("Option: %s", data);
-	 if (!strncmp(data, PREDEF_RECOVERY, strlen(PREDEF_RECOVERY)))
+	 if (!strncmp(data, POWER_RECOVERY, POWER_RECOVERY_LEN))
 		reboot_opt = SYSTEMD_STOP_POWER_RESTART_RECOVERY;
-	else if (!strncmp(data, PREDEF_REBOOT, strlen(PREDEF_REBOOT)))
+	else if (!strncmp(data, POWER_REBOOT, POWER_REBOOT_LEN))
 		reboot_opt = SYSTEMD_STOP_POWER_RESTART;
-	else if (!strncmp(data, PREDEF_FOTA_REBOOT, strlen(PREDEF_FOTA_REBOOT)))
+	else if (!strncmp(data, POWER_FOTA, POWER_FOTA_LEN))
 		reboot_opt = SYSTEMD_STOP_POWER_RESTART_FOTA;
 
 	ret = tel_register_noti_event(tapi_handle, TAPI_NOTI_MODEM_POWER,
@@ -221,20 +219,14 @@ static void telephony_flight_mode_off(TapiHandle *handle, int result, void *data
 		_E("failed to get vconf key");
 }
 
-static int telephony_flight_mode(int argc, char **argv)
+static int telephony_execute(void *data)
 {
 	int ret;
-	int mode;
+	int mode = *(int *)(data);
 	int err = TAPI_API_SUCCESS;
 
-	if (argc != 1 || argv[0] == NULL) {
-		_E("FlightMode Set predefine action failed");
-		return -1;
-	}
-	mode = atoi(argv[0]);
-
 	if (tapi_handle == NULL) {
-		ret = telephony_start();
+		ret = telephony_start(NORMAL_MODE);
 		if (ret != 0) {
 			_E("fail to get tapi handle");
 			return -1;
@@ -251,6 +243,19 @@ static int telephony_flight_mode(int argc, char **argv)
 	if (err != TAPI_API_SUCCESS)
 		_E("FlightMode tel api action failed %d",err);
 
+	return 0;
+}
+
+static int telephony_flight_mode(int argc, char **argv)
+{
+	int mode;
+
+	if (argc != 1 || argv[0] == NULL) {
+		_E("FlightMode Set predefine action failed");
+		return -1;
+	}
+	mode = atoi(argv[0]);
+	telephony_execute(&mode);
 	return 0;
 }
 
@@ -370,7 +375,7 @@ static DBusMessage *telephony_handler(E_DBus_Object *obj, DBusMessage *msg)
 	}
 
 	if (tapi_handle == NULL) {
-		if (telephony_start() != 0)
+		if (telephony_start(NORMAL_MODE) != 0)
 			_E("fail to get tapi handle");
 	}
 
@@ -403,19 +408,16 @@ static void telephony_init(void *data)
 			ARRAY_SIZE(edbus_methods));
 	if (ret < 0)
 		_E("fail to init edbus method(%d)", ret);
-
-	register_action(PREDEF_FLIGHT_MODE, telephony_flight_mode, NULL, NULL);
-	register_action(PREDEF_ENTERSLEEP, telephony_enter_sleep, NULL, NULL);
-	register_action(PREDEF_LEAVESLEEP, telephony_leave_sleep, NULL, NULL);
 }
 
 static const struct device_ops tel_device_ops = {
-	.priority	= DEVICE_PRIORITY_NORMAL,
-	.name		= "telephony",
-	.init		= telephony_init,
-	.start		= telephony_start,
-	.stop		= telephony_stop,
-	.exit		= telephony_exit,
+	.priority = DEVICE_PRIORITY_NORMAL,
+	.name     = "telephony",
+	.init     = telephony_init,
+	.start    = telephony_start,
+	.stop     = telephony_stop,
+	.exit     = telephony_exit,
+	.execute = telephony_execute,
 };
 
 DEVICE_OPS_REGISTER(&tel_device_ops)

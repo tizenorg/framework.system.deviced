@@ -35,6 +35,7 @@
 #include "core/common.h"
 #include "core/devices.h"
 #include "dd-display.h"
+#include "display-actor.h"
 
 #define TELEPHONY_PATH			"/org/tizen/telephony/SAMSUNG_QMI"
 #define TELEPHONY_INTERFACE_SIM		"org.tizen.telephony.Sim"
@@ -57,29 +58,27 @@
 
 static DBusMessage *edbus_start(E_DBus_Object *obj, DBusMessage *msg)
 {
-	static const struct device_ops *display_device_ops;
+	static const struct device_ops *display_device_ops = NULL;
 
-	if (!display_device_ops) {
+	if (!display_device_ops)
 		display_device_ops = find_device("display");
-		if (!display_device_ops)
-			return dbus_message_new_method_return(msg);
-	}
+	if (NOT_SUPPORT_OPS(display_device_ops))
+		return dbus_message_new_method_return(msg);
 
-	display_device_ops->start();
+	display_device_ops->start(CORE_LOGIC_MODE);
 	return dbus_message_new_method_return(msg);
 }
 
 static DBusMessage *edbus_stop(E_DBus_Object *obj, DBusMessage *msg)
 {
-	static const struct device_ops *display_device_ops;
+	static const struct device_ops *display_device_ops = NULL;
 
-	if (!display_device_ops) {
+	if (!display_device_ops)
 		display_device_ops = find_device("display");
-		if (!display_device_ops)
-			return dbus_message_new_method_return(msg);
-	}
+	if (NOT_SUPPORT_OPS(display_device_ops))
+		return dbus_message_new_method_return(msg);
 
-	display_device_ops->stop();
+	display_device_ops->stop(CORE_LOGIC_MODE);
 	return dbus_message_new_method_return(msg);
 }
 
@@ -96,6 +95,7 @@ static DBusMessage *edbus_lockstate(E_DBus_Object *obj, DBusMessage *msg)
 	int state;
 	int flag;
 	int ret;
+	unsigned int caps;
 
 	dbus_error_init(&err);
 
@@ -147,6 +147,23 @@ static DBusMessage *edbus_lockstate(E_DBus_Object *obj, DBusMessage *msg)
 		flag |= HOLD_KEY_BLOCK;
 	else if (!strcmp(option2_str, STANDBYMODE_STR))
 		flag |= STANDBY_MODE;
+
+	if (flag & GOTO_STATE_NOW) {
+		caps = display_get_caps(DISPLAY_ACTOR_API);
+
+		if (!display_has_caps(caps, DISPLAY_CAPA_LCDON) &&
+		    state == LCD_NORMAL) {
+			_D("No lcdon capability!");
+			ret = -EPERM;
+			goto out;
+		}
+		if (!display_has_caps(caps, DISPLAY_CAPA_LCDOFF) &&
+		    state == LCD_OFF) {
+			_D("No lcdoff capability!");
+			ret = -EPERM;
+			goto out;
+		}
+	}
 
 	if (check_dimstay(state, flag) == true) {
 		_E("LCD state can not be changed to OFF state now!");
@@ -239,6 +256,7 @@ static DBusMessage *edbus_changestate(E_DBus_Object *obj, DBusMessage *msg)
 	pid_t pid;
 	int state;
 	int ret;
+	unsigned int caps;
 
 	dbus_error_init(&err);
 
@@ -273,6 +291,21 @@ static DBusMessage *edbus_changestate(E_DBus_Object *obj, DBusMessage *msg)
 	else {
 		_E("%s state is invalid, dbus ignored!", state_str);
 		ret = -EINVAL;
+		goto out;
+	}
+
+	caps = display_get_caps(DISPLAY_ACTOR_API);
+
+	if (!display_has_caps(caps, DISPLAY_CAPA_LCDON) &&
+	    state == LCD_NORMAL) {
+		_D("No lcdon capability!");
+		ret = -EPERM;
+		goto out;
+	}
+	if (!display_has_caps(caps, DISPLAY_CAPA_LCDOFF) &&
+	    state == LCD_OFF) {
+		_D("No lcdoff capability!");
+		ret = -EPERM;
 		goto out;
 	}
 
@@ -369,7 +402,15 @@ static DBusMessage *edbus_setbrightness(E_DBus_Object *obj, DBusMessage *msg)
 {
 	DBusMessageIter iter;
 	DBusMessage *reply;
-	int cmd, brt, powersaver, autobrt, ret;
+	int cmd, brt, powersaver, autobrt, ret, caps;
+
+	caps = display_get_caps(DISPLAY_ACTOR_API);
+
+	if (!display_has_caps(caps, DISPLAY_CAPA_BRIGHTNESS)) {
+		_D("No brightness changing capability!");
+		ret = -EPERM;
+		goto error;
+	}
 
 	dbus_message_iter_init(msg, &iter);
 	dbus_message_iter_get_basic(&iter, &brt);
@@ -424,7 +465,15 @@ static DBusMessage *edbus_holdbrightness(E_DBus_Object *obj, DBusMessage *msg)
 {
 	DBusMessageIter iter;
 	DBusMessage *reply;
-	int cmd, brt, powersaver, autobrt, ret;
+	int cmd, brt, powersaver, autobrt, ret, caps;
+
+	caps = display_get_caps(DISPLAY_ACTOR_API);
+
+	if (!display_has_caps(caps, DISPLAY_CAPA_BRIGHTNESS)) {
+		_D("No brightness changing capability!");
+		ret = -EPERM;
+		goto error;
+	}
 
 	dbus_message_iter_init(msg, &iter);
 	dbus_message_iter_get_basic(&iter, &brt);
@@ -675,14 +724,14 @@ static DBusMessage *edbus_setrefreshrate(E_DBus_Object *obj, DBusMessage *msg)
 	control = display_conf.control_display;
 
 	if (control)
-		backlight_ops.off();
+		backlight_ops.off(NORMAL_MODE);
 
 	_D("app : %d, value : %d", app, val);
 	cmd = DISP_CMD(PROP_DISPLAY_FRAME_RATE, DEFAULT_DISPLAY);
 	ret = device_set_property(DEVICE_TYPE_DISPLAY, cmd, val);
 
 	if (control)
-		backlight_ops.on();
+		backlight_ops.on(NORMAL_MODE);
 
 error:
 	reply = dbus_message_new_method_return(msg);
@@ -1078,6 +1127,88 @@ error:
 	return reply;
 }
 
+static DBusMessage *edbus_staytouchscreenoff(E_DBus_Object *obj, DBusMessage *msg)
+{
+	DBusMessageIter iter;
+	DBusMessage *reply;
+	int ret = 0;
+	int val;
+
+	ret = dbus_message_get_args(msg, NULL, DBUS_TYPE_INT32, &val,
+		    DBUS_TYPE_INVALID);
+
+	if (!ret) {
+		_E("fail to get stay touchscreen off state %d", ret);
+		ret = -EINVAL;
+		goto error;
+	}
+
+	set_stay_touchscreen_off(val);
+error:
+	reply = dbus_message_new_method_return(msg);
+	dbus_message_iter_init_append(reply, &iter);
+	dbus_message_iter_append_basic(&iter, DBUS_TYPE_INT32, &ret);
+
+	return reply;
+}
+
+static DBusMessage *edbus_lcdpaneloffmode(E_DBus_Object *obj, DBusMessage *msg)
+{
+	DBusMessageIter iter;
+	DBusMessage *reply;
+	int ret = 0;
+	int val;
+
+	ret = dbus_message_get_args(msg, NULL, DBUS_TYPE_INT32, &val,
+		    DBUS_TYPE_INVALID);
+
+	if (!ret) {
+		_E("fail to get lcd panel off mode %d", ret);
+		ret = -EINVAL;
+		goto error;
+	}
+
+	set_lcd_paneloff_mode(val);
+error:
+	reply = dbus_message_new_method_return(msg);
+	dbus_message_iter_init_append(reply, &iter);
+	dbus_message_iter_append_basic(&iter, DBUS_TYPE_INT32, &ret);
+
+	return reply;
+}
+
+static DBusMessage *edbus_actorcontrol(E_DBus_Object *obj, DBusMessage *msg)
+{
+	DBusMessageIter iter;
+	DBusMessage *reply;
+	int ret = 0, val, actor;
+	char *op;
+
+	ret = dbus_message_get_args(msg, NULL, DBUS_TYPE_STRING, &op,
+		    DBUS_TYPE_INT32, &actor, DBUS_TYPE_INT32, &val,
+		    DBUS_TYPE_INVALID);
+
+	if (!ret) {
+		_E("fail to update actor control %d", ret);
+		ret = -EINVAL;
+		goto error;
+	}
+
+	if (!strcmp(op, "set"))
+		ret = display_set_caps(actor, val);
+	else if (!strcmp(op, "reset"))
+		ret = display_reset_caps(actor, val);
+	else
+		ret = -EINVAL;
+
+error:
+	reply = dbus_message_new_method_return(msg);
+	dbus_message_iter_init_append(reply, &iter);
+	dbus_message_iter_append_basic(&iter, DBUS_TYPE_INT32, &ret);
+
+	return reply;
+}
+
 static const struct edbus_method edbus_methods[] = {
 	{ "start",           NULL,  NULL, edbus_start },
 	{ "stop",            NULL,  NULL, edbus_stop },
@@ -1117,6 +1248,9 @@ static const struct edbus_method edbus_methods[] = {
 	{ "PowerKeyIgnore",   "i",  NULL, edbus_powerkeyignore },
 	{ "PowerKeyLCDOff",  NULL,   "i", edbus_powerkeylcdoff },
 	{ "CustomLCDOn",      "i",   "i", edbus_customlcdon },
+	{ "StayTouchScreenOff","i",  "i", edbus_staytouchscreenoff },
+	{ "LCDPanelOffMode",  "i",   "i", edbus_lcdpaneloffmode },
+	{ "ActorControl",   "sii",   "i", edbus_actorcontrol },
 	/* Add methods here */
 };
 
@@ -1125,6 +1259,11 @@ static void sim_signal_handler(void *data, DBusMessage *msg)
 	DBusError err;
 	int ret, val;
 	static int state = false;
+
+	if (!find_display_feature("auto-brightness")) {
+		_D("auto brightness is not supported!");
+		return;
+	}
 
 	if (state)
 		return;
@@ -1166,7 +1305,7 @@ static void homescreen_signal_handler(void *data, DBusMessage *msg)
 	DBusError err;
 	int ret;
 	char *screen;
-
+	pid_t pid;
 
 	ret = dbus_message_is_signal(msg, DEVICED_INTERFACE_NAME,
 	    SIGNAL_HOMESCREEN);
@@ -1186,10 +1325,12 @@ static void homescreen_signal_handler(void *data, DBusMessage *msg)
 
 	_D("screen : %s", screen);
 
-	if (set_alpm_screen)
-		set_alpm_screen(screen);
-	else
+	if (set_alpm_screen) {
+		pid = get_edbus_sender_pid(msg);
+		set_alpm_screen(screen, pid);
+	} else {
 		_E("alpm screen mode is not supported!");
+	}
 }
 
 static void extreme_signal_handler(void *data, DBusMessage *msg)
@@ -1228,9 +1369,29 @@ static void not_extreme_signal_handler(void *data, DBusMessage *msg)
 		_E("failed to set vconf status");
 }
 
+/*
+ * Default capability
+ * api      := LCDON | LCDOFF | BRIGHTNESS
+ * gesture  := LCDON
+ */
+static struct display_actor_ops display_api_actor = {
+	.id	= DISPLAY_ACTOR_API,
+	.caps	= DISPLAY_CAPA_LCDON |
+		  DISPLAY_CAPA_LCDOFF |
+		  DISPLAY_CAPA_BRIGHTNESS,
+};
+
+static struct display_actor_ops display_gesture_actor = {
+	.id	= DISPLAY_ACTOR_GESTURE,
+	.caps	= DISPLAY_CAPA_LCDON,
+};
+
 int init_pm_dbus(void)
 {
 	int ret;
+
+	display_add_actor(&display_api_actor);
+	display_add_actor(&display_gesture_actor);
 
 	ret = register_edbus_method(DEVICED_PATH_DISPLAY,
 		    edbus_methods, ARRAY_SIZE(edbus_methods));
@@ -1238,7 +1399,12 @@ int init_pm_dbus(void)
 		_E("Failed to register edbus method! %d", ret);
 		return ret;
 	}
-
+/*
+ * Auto-brightness feature has been implemented in wearable-device.
+ * But UX is not determined, then Block sim-check-logic temporary.
+ * This logic'll be re-enabled when UX concept related to sim is confirmed.
+ */
+/*
 	ret = register_edbus_signal_handler(TELEPHONY_PATH,
 		    TELEPHONY_INTERFACE_SIM, SIGNAL_SIM_STATUS,
 		    sim_signal_handler);
@@ -1246,7 +1412,7 @@ int init_pm_dbus(void)
 		_E("Failed to register signal handler! %d", ret);
 		return ret;
 	}
-
+*/
 	ret = register_edbus_signal_handler(DEVICED_OBJECT_PATH,
 		    DEVICED_INTERFACE_NAME, SIGNAL_HOMESCREEN,
 		    homescreen_signal_handler);

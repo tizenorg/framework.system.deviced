@@ -33,7 +33,7 @@
 
 #define FS_EXT4_NAME	"ext4"
 
-#define FS_EXT4_SMACK_LABEL " /usr/bin/mmc-smack-label"
+#define FS_EXT4_SMACK_LABEL "/usr/bin/mmc-smack-label"
 
 struct popup_data {
 	char *name;
@@ -81,12 +81,12 @@ static bool ext4_match(const char *devpath)
 	if (r < 0)
 		goto error;
 
-	_D("mmc search magic : 0x%2x, 0x%2x", buf[0],buf[1]);
+	_I("mmc search magic : 0x%2x, 0x%2x", buf[0],buf[1]);
 	if (memcmp(buf, ext4_info.magic, ext4_info.magic_sz))
 		goto error;
 
 	close(fd);
-	_D("MMC type : %s", ext4_info.name);
+	_I("MMC type : %s", ext4_info.name);
 	return true;
 
 error:
@@ -110,8 +110,6 @@ static int mmc_check_smack(const char *mount_point)
 	snprintf(buf, sizeof(buf), "%s", mount_point);
 	launch_evenif_exist(FS_EXT4_SMACK_LABEL, buf);
 
-	vconf_set_int(VCONFKEY_SYSMAN_MMC_STATUS, VCONFKEY_SYSMAN_MMC_MOUNTED);
-	vconf_set_int(VCONFKEY_SYSMAN_MMC_MOUNT, VCONFKEY_SYSMAN_MMC_MOUNT_COMPLETED);
 	if (mmc_popup_pid > 0) {
 		_E("will be killed mmc-popup(%d)", mmc_popup_pid);
 		kill(mmc_popup_pid, SIGTERM);
@@ -128,11 +126,9 @@ static int check_smack_popup(void)
 
 	ret = vconf_get_int(VCONFKEY_STARTER_SEQUENCE, &val);
 	if (val == 1 || ret != 0) {
-		if (apps == NULL) {
-			apps = find_device("apps");
-			if (apps == NULL)
-				return 0;
-		}
+
+		FIND_DEVICE_INT(apps, "apps");
+
 		params = malloc(sizeof(struct popup_data));
 		if (params == NULL) {
 			_E("Malloc failed");
@@ -155,13 +151,14 @@ static int ext4_mount(bool smack, const char *devpath, const char *mount_point)
 	do {
 		r = mount(devpath, mount_point, "ext4", 0, NULL);
 		if (!r) {
-			_D("Mounted mmc card [ext4]");
+			_I("Mounted mmc card [ext4]");
 			if (smack) {
 				check_smack_popup();
 				mmc_check_smack(mount_point);
 			}
 			return 0;
 		}
+		_I("mount fail : r = %d, err = %d", r, errno);
 		usleep(100000);
 	} while (r < 0 && errno == ENOENT && retry-- > 0);
 

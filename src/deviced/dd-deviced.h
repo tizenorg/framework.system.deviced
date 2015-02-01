@@ -78,10 +78,10 @@ enum dump_log_type {
  * 			The allocated memory size must be large enough to store the file name.
  * 			The result will include the terminating null byte('\0') at the end of the string.
  * @param[in] cmdline_size
- * @return 0 on success, -1 if failed.\n
- *         If the size of cmdline is smaller than the result, it will return -1 and  \n
+ * @return 0 on success, negative value if failed.\n
+ *         If the size of cmdline is smaller than the result, it will return -75 and  \n
  *         errno will be set as EOVERFLOW. \n
- *         If the function cannot open /proc/%d/cmdline file then it will return -1 and \n
+ *         If the function cannot open /proc/%d/cmdline file then it will return -3 and \n
  *         errno will be set as ESRCH.
  */
 int deviced_get_cmdline_name(pid_t pid, char *cmdline,
@@ -228,6 +228,17 @@ int deviced_set_timezone(char *tzpath_str);
  *         and errno will be set as EINVAL.
  */
 int deviced_call_predef_action(const char *type, int num, ...);
+
+/**
+ * @fn int deviced_change_flightmode(int mode)
+ * @brief This API call notifies about flight mode.
+ * @return 0 or positive value on success and negative value if failed.
+ * @retval -1 operation error
+ * @retval -EBADMSG dbus error (in case of any error on the bus)
+ * @retval -EINVAL no mandatory parameters
+ * @retval -ESRCH incorrect sender process id
+ */
+int deviced_change_flightmode(int mode);
 
 /**
  * @fn int deviced_inform_foregrd(void)

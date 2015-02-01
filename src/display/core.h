@@ -121,6 +121,8 @@ struct display_config {
 	int control_display;
 	int powerkey_doublepress;
 	int alpm_on;
+	int accel_sensor_on;
+	int continuous_sampling;
 };
 
 /*

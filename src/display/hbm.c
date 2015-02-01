@@ -20,19 +20,35 @@
 #include <fcntl.h>
 #include <Ecore.h>
 
+#include "hbm.h"
 #include "util.h"
 #include "core.h"
 #include "display-ops.h"
 #include "core/common.h"
 #include "core/device-notifier.h"
 #include "core/edbus-handler.h"
+#include "core/config-parser.h"
+
+#define BOARD_CONF_FILE "/etc/deviced/display.conf"
 
 #define ON		"on"
 #define OFF		"off"
 
+#define ON_LUX		39768
+#define OFF_LUX		10000
+#define ON_COUNT	1
+#define OFF_COUNT	1
+
 #define SIGNAL_HBM_OFF	"HBMOff"
 
 #define DEFAULT_BRIGHTNESS_LEVEL	80
+
+struct hbm_config hbm_conf = {
+	.on		= ON_LUX,
+	.off		= OFF_LUX,
+	.on_count	= ON_COUNT,
+	.off_count	= OFF_COUNT,
+};
 
 static Ecore_Timer *timer = NULL;
 static struct timespec offtime;
@@ -227,6 +243,35 @@ static int lcd_state_changed(void *data)
 	return 0;
 }
 
+static int hbm_load_config(struct parse_result *result, void *user_data)
+{
+	struct hbm_config *c = user_data;
+
+	_D("%s,%s,%s", result->section, result->name, result->value);
+
+	if (!c)
+		return -EINVAL;
+
+	if (!MATCH(result->section, "HBM"))
+		return 0;
+
+	if (MATCH(result->name, "on")) {
+		SET_CONF(c->on, atoi(result->value));
+		_D("on lux is %d", c->on);
+	} else if (MATCH(result->name, "off")) {
+		SET_CONF(c->off, atoi(result->value));
+		_D("off lux is %d", c->off);
+	} else if (MATCH(result->name, "on_count")) {
+		SET_CONF(c->on_count, atoi(result->value));
+		_D("on count is %d", c->on_count);
+	} else if (MATCH(result->name, "off_count")) {
+		SET_CONF(c->off_count, atoi(result->value));
+		_D("off count is %d", c->off_count);
+	}
+
+	return 0;
+}
+
 static void hbm_init(void *data)
 {
 	int fd, ret;
@@ -241,6 +286,12 @@ static void hbm_init(void *data)
 	}
 	close(fd);
 
+	/* load configutation */
+	ret = config_parse(BOARD_CONF_FILE, hbm_load_config, &hbm_conf);
+	if (ret < 0)
+		_W("Failed to load %s, %s Use default value!",
+		    BOARD_CONF_FILE, ret);
+
 	/* register notifier */
 	register_notifier(DEVICE_NOTIFIER_LCD, lcd_state_changed);
 }
@@ -249,6 +300,17 @@ static void hbm_exit(void *data)
 {
 	/* unregister notifier */
 	unregister_notifier(DEVICE_NOTIFIER_LCD, lcd_state_changed);
+
+	/*
+	 * set default brightness
+	 * if display logic is stopped in hbm state.
+	 */
+	if (hbm_get_state() == true) {
+		hbm_set_offtime(0);
+		vconf_set_int(VCONFKEY_SETAPPL_LCD_BRIGHTNESS,
+		    DEFAULT_BRIGHTNESS_LEVEL);
+		_I("set brightness to default value!");
+	}
 }
 
 static const struct display_ops display_hbm_ops = {

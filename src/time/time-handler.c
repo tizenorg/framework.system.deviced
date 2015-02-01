@@ -30,8 +30,6 @@
 #include <fcntl.h>
 #include <sys/timerfd.h>
 
-#include "core/data.h"
-#include "core/queue.h"
 #include "core/log.h"
 #include "core/devices.h"
 #include "display/poll.h"
@@ -365,8 +363,6 @@ static void time_init(void *data)
 	if (ret < 0)
 		_E("fail to init edbus method(%d)", ret);
 
-	register_action(PREDEF_SET_DATETIME, set_datetime_action, NULL, NULL);
-	register_action(PREDEF_SET_TIMEZONE, set_timezone_action, NULL, NULL);
 	if (timerfd_check_start() == -1) {
 		_E("fail system time change detector init");
 	}

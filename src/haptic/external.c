@@ -90,6 +90,7 @@ static void release(void)
 }
 
 static const struct haptic_ops ext_ops = {
+	.type     = HAPTIC_EXTERNAL,
 	.is_valid = is_valid,
 	.load     = load,
 	.release  = release,

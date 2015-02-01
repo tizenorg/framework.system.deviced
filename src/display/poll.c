@@ -80,13 +80,9 @@ static Eina_Bool pm_handler(void *data, Ecore_Fd_Handler *fd_handler)
 
 	int fd = (int)data;
 	int ret;
-	static const struct device_ops *display_device_ops;
+	static const struct device_ops *display_device_ops = NULL;
 
-	if (!display_device_ops) {
-		display_device_ops = find_device("display");
-		if (!display_device_ops)
-			return -ENODEV;
-	}
+	FIND_DEVICE_INT(display_device_ops, "display");
 
 	if (device_get_status(display_device_ops) != DEVICE_OPS_STATUS_START) {
 		_E("display is not started!");
@@ -122,7 +118,7 @@ int init_pm_poll(int (*pm_callback) (int, PMMsg *))
 		_I("Getting input device path from environment: %s",
 		       pm_input_env);
 		/* Add 2 bytes for following strncat() */
-		dev_paths_size =  strlen(pm_input_env) + 1;
+		dev_paths_size =  strlen(pm_input_env) + 2;
 		dev_paths = (char *)malloc(dev_paths_size);
 		if (!dev_paths) {
 			_E("Fail to malloc for dev path");
@@ -131,7 +127,7 @@ int init_pm_poll(int (*pm_callback) (int, PMMsg *))
 		snprintf(dev_paths, dev_paths_size, "%s", pm_input_env);
 	} else {
 		/* Add 2 bytes for following strncat() */
-		dev_paths_size = strlen(DEFAULT_DEV_PATH) + 1;
+		dev_paths_size = strlen(DEFAULT_DEV_PATH) + 2;
 		dev_paths = (char *)malloc(dev_paths_size);
 		if (!dev_paths) {
 			_E("Fail to malloc for dev path");
@@ -142,7 +138,6 @@ int init_pm_poll(int (*pm_callback) (int, PMMsg *))
 
 	/* add the UNIX domain socket file path */
 	strncat(dev_paths, DEV_PATH_DLM, strlen(DEV_PATH_DLM));
-	dev_paths[dev_paths_size - 1] = '\0';
 
 	path_tok = strtok_r(dev_paths, DEV_PATH_DLM, &save_ptr);
 	if (path_tok == NULL) {

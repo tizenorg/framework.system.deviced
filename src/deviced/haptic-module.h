@@ -51,6 +51,13 @@ typedef enum
 } haptic_module_feedback;
 
 /**
+ * @brief Enumerations of unlimited duration for the Haptic Module API.
+ */
+typedef enum {
+	HAPTIC_MODULE_DURATION_UNLIMITED = 0x7FFFFFFF,
+} haptic_module_duration;
+
+/**
  * @brief Enumerations of iteration count for the Haptic Module API.
  */
 typedef enum

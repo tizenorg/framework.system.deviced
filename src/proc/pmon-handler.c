@@ -26,7 +26,6 @@
 
 #include "core/log.h"
 #include "core/launch.h"
-#include "core/data.h"
 #include "core/common.h"
 #include "core/devices.h"
 
@@ -34,7 +33,7 @@
 
 static Ecore_Fd_Handler *pmon_efd = NULL;
 
-static int __pmon_start(struct main_data *ad);
+static int __pmon_start(void);
 static int __pmon_stop(int fd);
 static int replace_char(int size, char *t)
 {
@@ -92,7 +91,7 @@ static void print_pmon_state(unsigned int dead_pid)
 	_D("[Process MON] %d killed", dead_pid);
 }
 
-static int pmon_process(int pid, void *ad)
+static int pmon_process(int pid)
 {
 	char *cmdline;
 	int new_pid;
@@ -193,7 +192,6 @@ static unsigned int pmon_read(int fd)
 static Eina_Bool pmon_cb(void *data, Ecore_Fd_Handler * fd_handler)
 {
 	int fd;
-	struct main_data *ad = (struct main_data *)data;
 	int dead_pid;
 	char pid_str[PATH_MAX];
 	int ret;
@@ -215,19 +213,19 @@ static Eina_Bool pmon_cb(void *data, Ecore_Fd_Handler * fd_handler)
 	if (ret < 0 || ret >= PATH_MAX) {
 		__pmon_stop(fd);
 		_E("Reading DEAD_PID failed, restart ecore fd");
-		__pmon_start(ad);
+		__pmon_start();
 		goto out;
 	}
 
 	pid_str[ret] = '\0';
 	dead_pid = strtoul(pid_str, NULL, 10);
 	print_pmon_state(dead_pid);
-	pmon_process(dead_pid, ad);
+	pmon_process(dead_pid);
 out:
 	return EINA_TRUE;
 }
 
-static int __pmon_start(struct main_data *ad)
+static int __pmon_start(void)
 {
 	int pmon_fd = -1;
 	char pmon_dev_node[PATH_MAX];
@@ -264,14 +262,13 @@ static int __pmon_stop(int fd)
 
 static void pmon_init(void *data)
 {
-	struct main_data *ad = (struct main_data*)data;
 	int ret = -1;
 
 	if (pmon_efd) {
 		ecore_main_fd_handler_del(pmon_efd);
 		pmon_efd = NULL;
 	}
-	if (__pmon_start(ad) == -1) {
+	if (__pmon_start() == -1) {
 		_E("fail pmon control fd init");
 	}
 }

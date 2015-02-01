@@ -13,30 +13,35 @@ Source5:    devicectl-start@.service
 Source6:    devicectl-stop@.service
 Source1001: deviced.manifest
 Source1002: libdeviced.manifest
-Source1003: liblogd-db.manifest
-Source1004: liblogd.manifest
 
 BuildRequires:  cmake
 BuildRequires:  libattr-devel
 BuildRequires:  gettext-devel
 BuildRequires:  pkgconfig(ecore)
 BuildRequires:  pkgconfig(vconf)
-%ifnarch %{arm}
-BuildRequires:  pkgconfig(heynoti)
-%endif
 BuildRequires:  pkgconfig(dlog)
-BuildRequires:  pkgconfig(usbutils)
 BuildRequires:  pkgconfig(device-node)
 BuildRequires:  pkgconfig(edbus)
-BuildRequires:  pkgconfig(libxml-2.0)
 BuildRequires:  pkgconfig(capi-base-common)
 BuildRequires:  systemd-devel
 BuildRequires:	pkgconfig(systemd)
 BuildRequires:	pkgconfig(sqlite3)
+BuildRequires:	pkgconfig(libbuxton)
+BuildRequires:	pkgconfig(storage)
+BuildRequires:	pkgconfig(dbus-glib-1)
+BuildRequires:	pkgconfig(journal)
+BuildRequires:	pkgconfig(libarchive)
+BuildRequires:	pkgconfig(sensor)
+BuildRequires:	pkgconfig(tapi)
+
 Requires(preun): /usr/bin/systemctl
 Requires(post): sys-assert
 Requires(post): /usr/bin/systemctl
 Requires(post): /usr/bin/vconftool
+Requires(post): pulseaudio
+Requires(post): buxton
+Requires(post): pkgconfig(journal)
+Requires(post): pkgconfig(libarchive)
 Requires(postun): /usr/bin/systemctl
 
 %description
@@ -65,56 +70,15 @@ Requires:   libdeviced = %{version}-%{release}
 %description -n libdeviced-devel
 Deviced library for device control (devel)
 
-%package -n logd
-Summary: logd utils
-Group: Framework/system
-
-%description -n logd
-Utils for for logd
-
-%package -n liblogd
-Summary:	Activity logging API(Development)
-Group:		Development/Libraries
-
-%description -n liblogd
-logd library.
-
-%package -n liblogd-devel
-Summary:	Activity logging (Development)
-Summary:    SLP power manager client (devel)
-Group:		Development/Libraries
-
-%description -n liblogd-devel
-logd API library.
-
-%package -n liblogd-db
-Summary:	API to get activity data (Development)
-Group:		Development/Libraries
-
-%description -n liblogd-db
-logd-db library.
-
-%package -n liblogd-db-devel
-Summary:	API to get activity data (Development)
-Group:		Development/Libraries
-
-%description -n liblogd-db-devel
-logd-db API library.
-
 %prep
 %setup -q
+%if "%{?tizen_profile_name}" == "wearable"
 export CFLAGS+=" -DMICRO_DD"
-
-%if 0%{?sec_build_binary_debug_enable}
-export CFLAGS+=" -DTIZEN_DEBUG_ENABLE"
 %endif
 
-%if 0%{?tizen_build_binary_release_type_eng}
+export CFLAGS+=" -DTIZEN_DEBUG_ENABLE"
 export CFLAGS+=" -DTIZEN_ENGINEER_MODE"
 %define ENGINEER_MODE 1
-%else
-%define ENGINEER_MODE 0
-%endif
 
 %ifarch %{arm}
 %define ARCH arm
@@ -126,8 +90,6 @@ cmake . -DCMAKE_INSTALL_PREFIX=%{_prefix} -DARCH=%{ARCH}
 %build
 cp %{SOURCE1001} .
 cp %{SOURCE1002} .
-cp %{SOURCE1003} .
-cp %{SOURCE1004} .
 
 make
 
@@ -158,6 +120,36 @@ cp LICENSE.Apache-2.0 %{buildroot}/usr/share/license/%{name}
 cp LICENSE.Apache-2.0 %{buildroot}/usr/share/license/libdeviced
 
 %post
+%if "%{?tizen_profile_name}" == "wearable"
+%else
+#memory type vconf key init
+vconftool set -t int memory/sysman/mmc 0 -i -s system::vconf_system
+vconftool set -t int memory/sysman/earjack_key 0 -i -s system::vconf_system
+vconftool set -t int memory/sysman/cradle_status 0 -i -s system::vconf_system
+vconftool set -t int memory/sysman/added_usb_storage 0 -i -s system::vconf_system
+vconftool set -t int memory/sysman/removed_usb_storage 0 -i -s system::vconf_system
+vconftool set -t int memory/sysman/earjack -1 -i -s system::vconf_system
+vconftool set -t int memory/sysman/sliding_keyboard -1 -i -s system::vconf_system
+vconftool set -t int memory/sysman/mmc_mount -1 -i -s system::vconf_system
+vconftool set -t int memory/sysman/mmc_unmount -1 -i -s system::vconf_system
+vconftool set -t int memory/sysman/mmc_format -1 -i -s system::vconf_system
+vconftool set -t int memory/sysman/mmc_format_progress 0 -i -s system::vconf_system
+vconftool set -t int memory/sysman/hdmi 0 -i -s system::vconf_system
+vconftool set -t int memory/sysman/mmc_err_status 0 -i -s system::vconf_system
+vconftool set -t int memory/private/sysman/enhance_pid 0 -i -s system::vconf_system
+vconftool set -t int memory/private/sysman/siop_disable 0 -i -s system::vconf_system
+vconftool set -t string memory/private/sysman/added_storage_uevent "" -i -s system::vconf_system
+vconftool set -t string memory/private/sysman/removed_storage_uevent "" -u 5000 -i -s system::vconf_system
+vconftool set -t string memory/private/sysman/siop_level_uevent "" -i -s system::vconf_system
+#db type vconf key init
+vconftool set -t int db/sysman/mmc_dev_changed 0 -i -s system::vconf_system
+vconftool set -t int db/private/sysman/enhance_mode 0 -i -s system::vconf_system
+vconftool set -t int db/private/sysman/enhance_scenario 0 -i -s system::vconf_system
+vconftool set -t int db/private/sysman/enhance_tone 0 -i -s system::vconf_system
+vconftool set -t int db/private/sysman/enhance_outdoor 0 -i -s system::vconf_system
+vconftool set -t string db/private/sysman/mmc_device_id "" -i -s system::vconf_system
+%endif
+
 #memory type vconf key init
 vconftool set -t int memory/sysman/usbhost_status -1 -i -s system::vconf_system
 vconftool set -t int memory/sysman/charger_status 0 -i -s system::vconf_system
@@ -170,8 +162,10 @@ vconftool set -t int memory/sysman/stime_changed 0 -i -s system::vconf_system
 vconftool set -t int memory/sysman/power_off 0 -u 5000 -i -f -s system::vconf_system
 vconftool set -t int memory/deviced/boot_power_on 0 -u 5000 -i -f -s system::vconf_system
 vconftool set -t int memory/sysman/battery_level_status -1 -i -s system::vconf_system
+vconftool set -t int memory/sysman/low_memory 1 -i -s system::vconf_system
 
 #db type vconf key init
+vconftool set -t int db/private/sysman/cool_down_mode 0 -i -s system::vconf_system
 vconftool set -t bool db/private/deviced/lcd_brightness_init 0 -i -s system::vconf_system
 
 vconftool set -t int memory/pm/state 0 -i -g 5000 -s system::vconf_system
@@ -197,6 +191,19 @@ if [ $1 == 1 ]; then
     systemctl restart zbooting-done.service
 fi
 
+if [ $1 == 2 ]; then # upgrade begins, it's rpm -Uvh
+    #buxton could be started by socket activation
+   systemctl start buxton.service
+fi
+
+%pre
+#without updating services "daemon-reload" following systemctl stop is wait a
+# lot of time
+systemctl daemon-reload
+if [ $1 == 2 ]; then # it's upgrade, for rpm -Uvh
+    systemctl stop buxton.service
+fi
+
 %preun
 if [ $1 == 0 ]; then
     systemctl stop deviced.service
@@ -211,6 +218,8 @@ systemctl daemon-reload
 %{_bindir}/deviced
 %{_bindir}/devicectl
 %{_bindir}/deviced-auto-test
+%{_datadir}/dbus-1/services/org.tizen.system.deviced-auto-test.service
+%{_libdir}/systemd/system/deviced-auto-test.service
 %{_libdir}/systemd/system/deviced.service
 %{_libdir}/systemd/system/multi-user.target.wants/deviced.service
 %{_sysconfdir}/systemd/default-extra-dependencies/ignore-units.d/deviced.service
@@ -225,8 +234,20 @@ systemctl daemon-reload
 %{_libdir}/systemd/system/devicectl-start@.service
 %{_libdir}/systemd/system/shutdown.target.wants/devicectl-stop@display.service
 %{_datadir}/license/%{name}
-%{_datadir}/deviced/usb-configurations/*
-%{_sysconfdir}/smack/accesses2.d/deviced.rule
+%{_sysconfdir}/smack/accesses.d/deviced.efl
+/etc/deviced/pass.conf
+/etc/deviced/usb-client-configuration.conf
+/etc/deviced/usb-client-operation.conf
+%if "%{?tizen_profile_name}" == "wearable"
+%else
+/etc/deviced/led.conf
+%{_bindir}/movi_format.sh
+%{_bindir}/mmc-smack-label
+%{_bindir}/fsck_msdosfs
+%{_bindir}/newfs_msdos
+%{_datadir}/license/fsck_msdosfs
+%{_datadir}/license/newfs_msdos
+%endif
 
 %manifest deviced.manifest
 %attr(110,root,root) /opt/etc/dump.d/module.d/dump_pm.sh
@@ -234,6 +255,8 @@ systemctl daemon-reload
 %{_sysconfdir}/deviced/mmc.conf
 %{_sysconfdir}/deviced/battery.conf
 %{_sysconfdir}/deviced/pmqos.conf
+%{_sysconfdir}/deviced/storage.conf
+%{_sysconfdir}/deviced/haptic.conf
 
 %attr(750,root,root)%{_bindir}/start_dr.sh
 %if %ENGINEER_MODE
@@ -252,15 +275,3 @@ systemctl daemon-reload
 %{_includedir}/deviced/*.h
 %{_libdir}/libdeviced.so
 %{_libdir}/pkgconfig/deviced.pc
-
-%files -n logd
-
-%files -n liblogd
-%manifest liblogd.manifest
-
-%files -n liblogd-devel
-
-%files -n liblogd-db
-%manifest liblogd-db.manifest
-
-%files -n liblogd-db-devel

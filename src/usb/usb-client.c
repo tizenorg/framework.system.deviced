@@ -23,19 +23,10 @@
 
 #define USB_POPUP_NAME "usb-syspopup"
 
-#ifndef VCONFKEY_USB_CONFIGURATION_ENABLED
-#define VCONFKEY_USB_CONFIGURATION_ENABLED "memory/private/usb/conf_enabled"
-#endif
-
 struct popup_data {
 	char *name;
 	char *key;
 	char *value;
-};
-
-enum usb_enabled {
-	USB_CONF_DISABLED,
-	USB_CONF_ENABLED,
 };
 
 static bool client_mode = false;
@@ -47,12 +38,7 @@ void launch_syspopup(char *str)
 	struct popup_data params;
 	static const struct device_ops *apps = NULL;
 
-	if (apps == NULL) {
-		apps = find_device("apps");
-		if (apps == NULL)
-			return;
-	}
-
+	FIND_DEVICE_VOID(apps, "apps");
 	params.name = USB_POPUP_NAME;
 	params.key = POPUP_KEY_CONTENT;
 	params.value = str;
@@ -85,7 +71,13 @@ int get_default_mode(void)
 
 int update_usb_state(int state)
 {
-	return vconf_set_int(VCONFKEY_SYSMAN_USB_STATUS, state);
+	int ret;
+
+	ret = vconf_set_int(VCONFKEY_SYSMAN_USB_STATUS, state);
+	if (ret == 0)
+		send_msg_usb_state_changed();
+
+	return ret;
 }
 
 int update_current_usb_mode(int mode)
@@ -93,7 +85,7 @@ int update_current_usb_mode(int mode)
 	/*************************************************/
 	/* TODO: This legacy vconf key should be removed */
 	/* The legacy vconf key is used by mtp and OSP   */
-	int legacy;
+	int legacy, ret;
 
 	switch(mode) {
 	case SET_USB_DEFAULT:
@@ -119,17 +111,31 @@ int update_current_usb_mode(int mode)
 		_E("Failed to set legacy vconf key for current usb mode");
 	/****************************************************/
 
-	return vconf_set_int(VCONFKEY_USB_CUR_MODE, mode);
+	ret = vconf_set_int(VCONFKEY_USB_CUR_MODE, mode);
+	if (ret == 0) {
+		send_msg_usb_mode_changed();
+		send_msg_usb_state_changed();
+	}
+	return ret;
 }
 
-int check_current_usb_state(void)
+int get_current_usb_logical_state(void)
 {
-	int ret;
+	int value;
+
+	if (vconf_get_int(VCONFKEY_SYSMAN_USB_STATUS, &value) != 0)
+		return -ENOMEM;
+
+	return value;
+}
+
+int get_current_usb_physical_state(void)
+{
 	int state;
 
-	ret = device_get_property(DEVICE_TYPE_EXTCON, PROP_EXTCON_USB_ONLINE, &state);
-	if (ret != 0)
-		return -ENOMEM;
+	if (device_get_property(DEVICE_TYPE_EXTCON, PROP_EXTCON_USB_ONLINE, &state) != 0
+			|| (state != 0 && state != 1))
+		state = get_usb_state_direct();
 
 	return state;
 }
@@ -163,6 +169,31 @@ int change_selected_usb_mode(int mode)
 	if (mode <= SET_USB_NONE)
 		return -EINVAL;
 	return vconf_set_int(VCONFKEY_USB_SEL_MODE, mode);
+}
+
+static void reconfigure_boot_usb_mode(void)
+{
+	int prev, now;
+
+	prev = get_selected_usb_mode();
+
+	switch (prev) {
+	case SET_USB_RNDIS:
+	case SET_USB_RNDIS_TETHERING:
+		now = SET_USB_DEFAULT;
+		break;
+	case SET_USB_RNDIS_DIAG:
+		now = SET_USB_SDB_DIAG;
+		break;
+	case SET_USB_RNDIS_SDB:
+		now = SET_USB_SDB;
+		break;
+	default:
+		return;
+	}
+
+	if (change_selected_usb_mode(now) != 0)
+		_E("Failed to set selected usb mode");
 }
 
 static int notify_vconf_keys(void)
@@ -246,21 +277,6 @@ static int unregister_client_handlers(void)
 	return 0;
 }
 
-static int init_client_values(void)
-{
-	int ret;
-
-	ret = make_empty_configuration_list();
-	if (ret < 0)
-		_E("Failed to get information of usb configurations");
-
-	ret = make_supported_confs_list();
-	if (ret < 0)
-		_E("Failed to get information of usb configuration files");
-
-	return 0;
-}
-
 static void deinit_client_values(void)
 {
 	int sel_mode;
@@ -275,9 +291,6 @@ static void deinit_client_values(void)
 	default:
 		break;
 	}
-
-	release_supported_confs_list();
-	release_configuration_list();
 }
 
 static int init_client(void)
@@ -287,10 +300,6 @@ static int init_client(void)
 	client_mode = true;
 
 	ret = register_client_handlers();
-	if (ret < 0)
-		return ret;
-
-	ret = init_client_values();
 	if (ret < 0)
 		return ret;
 
@@ -312,7 +321,6 @@ static int deinit_client(void)
 	return 0;
 }
 
-#ifdef MICRO_DD
 void act_usb_connected(void)
 {
 	wait_configured = false;
@@ -327,22 +335,6 @@ void act_usb_connected(void)
 
 	pm_lock_internal(getpid(), LCD_OFF, STAY_CUR_STATE, 0);
 }
-#else
-void act_usb_connected(void)
-{
-	wait_configured = true;
-
-	if (vconf_set_int(VCONFKEY_USB_CONFIGURATION_ENABLED, USB_CONF_ENABLED) != 0)
-		_E("Failed to set vconf key (%s)", VCONFKEY_USB_CONFIGURATION_ENABLED);
-
-	if (init_client() < 0)
-		_E("FAIL: init_client()");
-
-	change_client_setting(SET_CONFIGURATION);
-
-	pm_lock_internal(getpid(), LCD_OFF, STAY_CUR_STATE, 0);
-}
-#endif
 
 static void act_usb_disconnected(void)
 {
@@ -465,6 +457,8 @@ void usbclient_init_booting_done(void)
 {
 	int ret, i;
 
+	reconfigure_boot_usb_mode();
+
 	for (i = 0 ; i < ARRAY_SIZE(uhs) ; i++) {
 		ret = register_kernel_uevent_control(&uhs[i]);
 		if (ret < 0)
@@ -473,6 +467,9 @@ void usbclient_init_booting_done(void)
 
 	if (register_usb_client_change_request() < 0)
 		_E("Failed to register the request to change usb mode");
+
+	if (register_usbclient_dbus_methods() < 0)
+		_E("Failed to register dbus handler for usbclient");
 }
 
 static void usbclient_init(void *data)

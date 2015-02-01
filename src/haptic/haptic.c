@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <dlfcn.h>
+#include <assert.h>
 #include <vconf.h>
 
 #include "core/log.h"
@@ -28,17 +29,21 @@
 #include "core/devices.h"
 #include "core/edbus-handler.h"
 #include "core/device-notifier.h"
+#include "core/config-parser.h"
+#include "powersaver/powersaver.h"
 #include "haptic.h"
 
 #ifndef DATADIR
 #define DATADIR		"/usr/share/deviced"
 #endif
 
+#define HAPTIC_CONF_PATH			"/etc/deviced/haptic.conf"
+
 /* hardkey vibration variable */
-#define HARDKEY_VIB_RESOURCE		DATADIR"/HW_touch_30ms_sharp.ivt"
 #define HARDKEY_VIB_ITERATION		1
 #define HARDKEY_VIB_FEEDBACK		3
 #define HARDKEY_VIB_PRIORITY		2
+#define HARDKEY_VIB_DURATION		300
 #define HAPTIC_FEEDBACK_STEP		20
 
 /* power on, power off vibration variable */
@@ -48,7 +53,10 @@
 
 #define MAX_EFFECT_BUFFER			(64*1024)
 
-#define RETRY_CNT					3
+#ifndef VCONFKEY_RECORDER_STATE
+#define VCONFKEY_RECORDER_STATE "memory/recorder/state"
+#define VCONFKEY_RECORDER_STATE_RECORDING	2
+#endif
 
 #define CHECK_VALID_OPS(ops, r)		((ops) ? true : !(r = -ENODEV))
 
@@ -58,7 +66,16 @@ static int g_handle;
 /* haptic operation variable */
 static dd_list *h_head;
 static const struct haptic_plugin_ops *h_ops;
+static enum haptic_type h_type;
 static bool haptic_disabled;
+static int powersaver_on = 0;
+
+struct haptic_config {
+	int level;
+	int *level_arr;
+};
+
+static struct haptic_config haptic_conf;
 
 static int haptic_start(void);
 static int haptic_stop(void);
@@ -85,6 +102,7 @@ static int haptic_module_load(void)
 		if (ops->is_valid && ops->is_valid()) {
 			if (ops->load)
 				h_ops = ops->load();
+			h_type = ops->type;
 			break;
 		}
 	}
@@ -95,11 +113,30 @@ static int haptic_module_load(void)
 	}
 
 	/* solution bug
-	   we do not use internal vibration except power off
-	   but module does not stop vibrating, although called terminate function */
+	 * we do not use internal vibration except power off.
+	 * if the last handle is closed during the playing of vibration,
+	 * solution makes unlimited vibration.
+	 * so we need at least one handle. */
 	haptic_internal_init();
 
 	return 0;
+}
+
+static int convert_magnitude_by_conf(int level)
+{
+	int i, step;
+
+	assert(level >= 0 && level <= 100);
+
+	step = 100 / (haptic_conf.level-1);
+	for (i = 0; i < haptic_conf.level; ++i) {
+		if (level <= i*step) {
+			_D("level changed : %d -> %d", level, haptic_conf.level_arr[i]);
+			return haptic_conf.level_arr[i];
+		}
+	}
+
+	return -EINVAL;
 }
 
 static DBusMessage *edbus_get_count(E_DBus_Object *obj, DBusMessage *msg)
@@ -128,8 +165,12 @@ static DBusMessage *edbus_open_device(E_DBus_Object *obj, DBusMessage *msg)
 	DBusMessage *reply;
 	int index, handle, ret;
 
-	if (!CHECK_VALID_OPS(h_ops, ret))
-		goto exit;
+	/* Load haptic module before booting done */
+	if (!CHECK_VALID_OPS(h_ops, ret)) {
+		ret = haptic_module_load();
+		if (ret < 0)
+			goto exit;
+	}
 
 	if (!dbus_message_get_args(msg, NULL, DBUS_TYPE_INT32, &index, DBUS_TYPE_INVALID)) {
 		ret = -EINVAL;
@@ -176,20 +217,25 @@ static DBusMessage *edbus_vibrate_monotone(E_DBus_Object *obj, DBusMessage *msg)
 	DBusMessageIter iter;
 	DBusMessage *reply;
 	unsigned int handle;
-	int duration, level, priority, e_handle, ret;
+	int duration, level, priority, e_handle, ret = 0;
 
 	if (!CHECK_VALID_OPS(h_ops, ret))
 		goto exit;
 
-	if (haptic_disabled) {
-		ret = -EACCES;
+	if (haptic_disabled)
 		goto exit;
-	}
 
 	if (!dbus_message_get_args(msg, NULL, DBUS_TYPE_UINT32, &handle,
 				DBUS_TYPE_INT32, &duration,
 				DBUS_TYPE_INT32, &level,
 				DBUS_TYPE_INT32, &priority, DBUS_TYPE_INVALID)) {
+		ret = -EINVAL;
+		goto exit;
+	}
+
+	/* convert as per conf value */
+	level = convert_magnitude_by_conf(level);
+	if (level < 0) {
 		ret = -EINVAL;
 		goto exit;
 	}
@@ -212,21 +258,26 @@ static DBusMessage *edbus_vibrate_buffer(E_DBus_Object *obj, DBusMessage *msg)
 	DBusMessage *reply;
 	unsigned int handle;
 	unsigned char *data;
-	int size, iteration, level, priority, e_handle, ret;
+	int size, iteration, level, priority, e_handle, ret = 0;
 
 	if (!CHECK_VALID_OPS(h_ops, ret))
 		goto exit;
 
-	if (haptic_disabled) {
-		ret = -EACCES;
+	if (haptic_disabled)
 		goto exit;
-	}
 
 	if (!dbus_message_get_args(msg, NULL, DBUS_TYPE_UINT32, &handle,
 				DBUS_TYPE_ARRAY, DBUS_TYPE_BYTE, &data, &size,
 				DBUS_TYPE_INT32, &iteration,
 				DBUS_TYPE_INT32, &level,
 				DBUS_TYPE_INT32, &priority, DBUS_TYPE_INVALID)) {
+		ret = -EINVAL;
+		goto exit;
+	}
+
+	/* convert as per conf value */
+	level = convert_magnitude_by_conf(level);
+	if (level < 0) {
 		ret = -EINVAL;
 		goto exit;
 	}
@@ -247,15 +298,13 @@ static DBusMessage *edbus_stop_device(E_DBus_Object *obj, DBusMessage *msg)
 	DBusMessageIter iter;
 	DBusMessage *reply;
 	unsigned int handle;
-	int ret;
+	int ret = 0;
 
 	if (!CHECK_VALID_OPS(h_ops, ret))
 		goto exit;
 
-	if (haptic_disabled) {
-		ret = -EACCES;
+	if (haptic_disabled)
 		goto exit;
-	}
 
 	if (!dbus_message_get_args(msg, NULL, DBUS_TYPE_UINT32, &handle, DBUS_TYPE_INVALID)) {
 		ret = -EINVAL;
@@ -456,24 +505,23 @@ static int haptic_internal_exit(void)
 	return h_ops->close_device(g_handle);
 }
 
-static int haptic_booting_done_cb(void *data)
-{
-	return haptic_module_load();
-}
-
 static int haptic_hardkey_changed_cb(void *data)
 {
-	int size, level, status, e_handle, ret, cnt = RETRY_CNT;
+	int size, level, status, e_handle, ret;
 	unsigned char *buf;
 
-	while (!CHECK_VALID_OPS(h_ops, ret) && cnt--) {
-		haptic_module_load();
-		if (!cnt)
+	if (!CHECK_VALID_OPS(h_ops, ret)) {
+		ret = haptic_module_load();
+		if (ret < 0)
 			return ret;
 	}
 
 	if (!g_handle)
 		haptic_internal_init();
+
+	/* if haptic is stopped, do not play vibration */
+	if (haptic_disabled || powersaver_on)
+		return 0;
 
 	if (vconf_get_bool(VCONFKEY_SETAPPL_HAPTIC_FEEDBACK_STATUS_BOOL, &status) < 0) {
 		_E("fail to get VCONFKEY_SETAPPL_HAPTIC_FEEDBACK_STATUS_BOOL");
@@ -484,32 +532,27 @@ static int haptic_hardkey_changed_cb(void *data)
 	if (!status)
 		return 0;
 
-	buf = convert_file_to_buffer(HARDKEY_VIB_RESOURCE, &size);
-	if (!buf)
-		return -1;
-
 	ret = vconf_get_int(VCONFKEY_SETAPPL_TOUCH_FEEDBACK_VIBRATION_LEVEL_INT, &level);
 	if (ret < 0) {
 		_E("fail to get VCONFKEY_SETAPPL_TOUCH_FEEDBACK_VIBRATION_LEVEL_INT");
 		level = HARDKEY_VIB_FEEDBACK;
 	}
 
-	ret = h_ops->vibrate_buffer(g_handle, buf, HARDKEY_VIB_ITERATION,
+	ret = h_ops->vibrate_monotone(g_handle, HARDKEY_VIB_DURATION,
 			level*HAPTIC_FEEDBACK_STEP, HARDKEY_VIB_PRIORITY, &e_handle);
 	if (ret < 0)
 		_E("fail to vibrate buffer : %d", ret);
 
-	free(buf);
 	return ret;
 }
 
 static int haptic_poweroff_cb(void *data)
 {
-	int e_handle, ret, cnt = RETRY_CNT;
+	int e_handle, ret;
 
-	while (!CHECK_VALID_OPS(h_ops, ret) && cnt--) {
-		haptic_module_load();
-		if (!cnt)
+	if (!CHECK_VALID_OPS(h_ops, ret)) {
+		ret = haptic_module_load();
+		if (ret < 0)
 			return ret;
 	}
 
@@ -531,13 +574,97 @@ static int haptic_poweroff_cb(void *data)
 
 static int haptic_powersaver_cb(void *data)
 {
-	int powersaver_on = (int)data;
+	int mode = (int)data;
 
-	if (powersaver_on)
+	switch (mode) {
+	case POWERSAVER_OFF:
+		powersaver_on = false;
+		break;
+	case POWERSAVER_BASIC:
+	case POWERSAVER_ENHANCED:
+		powersaver_on = true;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	_I("changed powersaver %d", powersaver_on);
+	return 0;
+}
+
+static void sound_capturing_cb(keynode_t *key, void *data)
+{
+	int status;
+
+	status = vconf_keynode_get_int(key);
+
+	/* if sound capture is in use, this value is 1(true). */
+	if (status == VCONFKEY_RECORDER_STATE_RECORDING)
 		haptic_stop();
 	else
 		haptic_start();
+}
 
+static int parse_section(struct parse_result *result, void *user_data, int index)
+{
+	struct haptic_config *conf = (struct haptic_config*)user_data;
+
+	assert(result);
+	assert(result->section && result->name && result->value);
+
+	if (MATCH(result->name, "level")) {
+		conf->level = atoi(result->value);
+		conf->level_arr = calloc(sizeof(int), conf->level);
+		if (!conf->level_arr) {
+			_E("failed to allocate memory for level");
+			return -errno;
+		}
+	} else if (MATCH(result->name, "value")) {
+		if (index < 0)
+			return -EINVAL;
+		conf->level_arr[index] = atoi(result->value);
+	}
+
+	return 0;
+}
+
+static int haptic_load_config(struct parse_result *result, void *user_data)
+{
+	struct haptic_config *conf = (struct haptic_config*)user_data;
+	char name[NAME_MAX];
+	int ret;
+	static int index = 0;
+
+	if (!result)
+		return 0;
+
+	if (!result->section || !result->name || !result->value)
+		return 0;
+
+	/* Parsing 'Haptic' section */
+	if (MATCH(result->section, "Haptic")) {
+		ret = parse_section(result, user_data, -1);
+		if (ret < 0) {
+			_E("failed to parse [Haptic] section : %d", ret);
+			return ret;
+		}
+		goto out;
+	}
+
+	/* Parsing 'Level' section */
+	for (index = 0; index < conf->level; ++index) {
+		snprintf(name, sizeof(name), "level%d", index);
+		if (MATCH(result->section, name)) {
+			ret = parse_section(result, user_data, index);
+			if (ret < 0) {
+				_E("failed to parse [level] section : %d", ret);
+				return ret;
+			}
+			goto out;
+		}
+	}
+
+out:
 	return 0;
 }
 
@@ -559,16 +686,29 @@ static void haptic_init(void *data)
 {
 	int r;
 
+	/* Load haptic module */
+	haptic_module_load();
+
+	/* get haptic data from configuration file */
+	r = config_parse(HAPTIC_CONF_PATH, haptic_load_config, &haptic_conf);
+	if (r < 0) {
+		_E("failed to load configuration file(%s) : %d", HAPTIC_CONF_PATH, r);
+		safe_free(haptic_conf.level_arr);
+	}
+
 	/* init dbus interface */
 	r = register_edbus_method(DEVICED_PATH_HAPTIC, edbus_methods, ARRAY_SIZE(edbus_methods));
 	if (r < 0)
 		_E("fail to init edbus method(%d)", r);
 
 	/* register notifier for below each event */
-	register_notifier(DEVICE_NOTIFIER_BOOTING_DONE, haptic_booting_done_cb);
 	register_notifier(DEVICE_NOTIFIER_TOUCH_HARDKEY, haptic_hardkey_changed_cb);
 	register_notifier(DEVICE_NOTIFIER_POWEROFF_HAPTIC, haptic_poweroff_cb);
-	register_notifier(DEVICE_NOTIFIER_POWERSAVER, haptic_powersaver_cb);
+	register_notifier(DEVICE_NOTIFIER_PMQOS_ULTRAPOWERSAVING,
+	    haptic_powersaver_cb);
+
+	/* add watch for sound capturing value */
+	vconf_notify_key_changed(VCONFKEY_RECORDER_STATE, sound_capturing_cb, NULL);
 }
 
 static void haptic_exit(void *data)
@@ -577,11 +717,17 @@ static void haptic_exit(void *data)
 	dd_list *elem;
 	int r;
 
+	/* remove watch */
+	vconf_ignore_key_changed(VCONFKEY_RECORDER_STATE, sound_capturing_cb);
+
 	/* unregister notifier for below each event */
-	unregister_notifier(DEVICE_NOTIFIER_BOOTING_DONE, haptic_booting_done_cb);
 	unregister_notifier(DEVICE_NOTIFIER_TOUCH_HARDKEY, haptic_hardkey_changed_cb);
 	unregister_notifier(DEVICE_NOTIFIER_POWEROFF_HAPTIC, haptic_poweroff_cb);
-	unregister_notifier(DEVICE_NOTIFIER_POWERSAVER, haptic_powersaver_cb);
+	unregister_notifier(DEVICE_NOTIFIER_PMQOS_ULTRAPOWERSAVING,
+	    haptic_powersaver_cb);
+
+	/* release haptic data memory */
+	safe_free(haptic_conf.level_arr);
 
 	if (!CHECK_VALID_OPS(h_ops, r))
 		return;

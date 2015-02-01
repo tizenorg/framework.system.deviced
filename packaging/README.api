@@ -5,6 +5,9 @@ DBus method_call smack authority
 
 * : all user can access the methods.
 
+Battery
+	org.tizen.system.deviced.Battery.GetPercent                 *
+	org.tizen.system.deviced.Battery.GetPercentRaw              *
 Display
 	org.tizen.system.deviced.display.start                      root only
 	org.tizen.system.deviced.display.stop                       root only
@@ -23,10 +26,10 @@ Display
 	org.tizen.system.deviced.display.setautobrightnessmin       *
 	org.tizen.system.deviced.display.setlcdtimeout              *
 	org.tizen.system.deviced.display.LockScreenBgOn             *
-	org.tizen.system.deviced.display.GetDisplayCount            *
-	org.tizen.system.deviced.display.GetMaxBrightness           *
-	org.tizen.system.deviced.display.GetBrightness              *
-	org.tizen.system.deviced.display.SetBrightness              *
+	org.tizen.system.deviced.display.GetDisplayCount            deviced::display
+	org.tizen.system.deviced.display.GetMaxBrightness           deviced::display
+	org.tizen.system.deviced.display.GetBrightness              deviced::display
+	org.tizen.system.deviced.display.SetBrightness              deviced::display
 	org.tizen.system.deviced.display.HoldBrightness             deviced::display
 	org.tizen.system.deviced.display.ReleaseBrightness          *
 	org.tizen.system.deviced.display.GetAclStatus               *
@@ -39,45 +42,46 @@ Display
 	org.tizen.system.deviced.display.SetFrameRate               *
 	org.tizen.system.deviced.display.GetColorBlind              *
 	org.tizen.system.deviced.display.SetColorBlind              *
+Hall
+	org.tizen.system.deviced.hall.getstatus                     *
 Hapic
-	org.tizen.system.deviced.haptic.GetCount                    *
-	org.tizen.system.deviced.haptic.OpenDevice                  *
-	org.tizen.system.deviced.haptic.CloseDevice                 *
-	org.tizen.system.deviced.haptic.StopDevice                  *
-	org.tizen.system.deviced.haptic.VibrateMonotone             *
+	org.tizen.system.deviced.haptic.GetCount                    deviced::haptic
+	org.tizen.system.deviced.haptic.OpenDevice                  deviced::haptic
+	org.tizen.system.deviced.haptic.CloseDevice                 deviced::haptic
+	org.tizen.system.deviced.haptic.StopDevice                  deviced::haptic
+	org.tizen.system.deviced.haptic.VibrateMonotone             deviced::haptic
 	org.tizen.system.deviced.haptic.VibrateBuffer               *
 	org.tizen.system.deviced.haptic.GetState                    *
 	org.tizen.system.deviced.haptic.GetDuration                 *
 	org.tizen.system.deviced.haptic.CreateEffect                *
 	org.tizen.system.deviced.haptic.SaveBinary                  *
+Led
+	org.tizen.system.deviced.Led.playcustom                     deviced::led
+	org.tizen.system.deviced.Led.stopcustom                     deviced::led
+	org.tizen.system.deviced.Led.GetBrightness                  deviced::led
+	org.tizen.system.deviced.Led.GetMaxBrightness               deviced::led
+	org.tizen.system.deviced.Led.SetBrightness                  deviced::led
+	org.tizen.system.deviced.Led.SetIrCommand                   deviced::led
+	org.tizen.system.deviced.Led.SetMode                        *
+	org.tizen.system.deviced.Led.PrintMode                      *
+Lowmem
+Mmc
+	org.tizen.system.deviced.Mmc.RequestMount                   *
+	org.tizen.system.deviced.Mmc.RequestUnmount                 *
+	org.tizen.system.deviced.Mmc.RequestFormat                  *
+Ode
 Pass
 	org.tizen.system.deviced.pass.start                         root only
 	org.tizen.system.deviced.pass.stop                          root only
 	org.tizen.system.deviced.pass.bypass                        root only
-Hall
-	org.tizen.system.deviced.hall.getstatus                     *
 Power
 	org.tizen.system.deviced.power.setresetkeydisable           deviced::power
 	org.tizen.system.deviced.power.entersleep                   root only
 	org.tizen.system.deviced.power.leavesleep                   root only
-	org.tizen.system.deviced.power.reboot                       root only
+	org.tizen.system.deviced.power.reboot                       deviced::power
 	org.tizen.system.deviced.power.reboot-recovery              root only
-	org.tizen.system.deviced.power.pwroff-popup                 *
+	org.tizen.system.deviced.power.pwroff-popup                 deviced::power
 	org.tizen.system.deviced.power.flightmode                   root only
-Storage
-	org.tizen.system.deviced.storage.getstorage                 *
-Ode
-Lowmem
-Led
-	org.tizen.system.deviced.Led.playcustom                     *
-	org.tizen.system.deviced.Led.stopcustom                     *
-	org.tizen.system.deviced.Led.GetBrightness                  *
-	org.tizen.system.deviced.Led.GetMaxBrightness               *
-	org.tizen.system.deviced.Led.SetBrightness                  *
-	org.tizen.system.deviced.Led.SetIrCommand                   *
-	org.tizen.system.deviced.Led.SetMode                        *
-	org.tizen.system.deviced.Led.PrintMode                      *
-
 Process
 	org.tizen.system.deviced.Process.foregrd                    root only
 	org.tizen.system.deviced.Process.backgrd                    root only
@@ -85,7 +89,8 @@ Process
 	org.tizen.system.deviced.Process.inactive                   *
 	org.tizen.system.deviced.Process.oomadj_set                 root only
 	org.tizen.system.deviced.Process.process_group_set          root only
-
+Storage
+	org.tizen.system.deviced.storage.getstorage                 *
 SysNoti
 	org.tizen.system.deviced.SysNoti.set_max_frequency          root only
 	org.tizen.system.deviced.SysNoti.set_min_frequency          root only
@@ -101,8 +106,8 @@ SysNoti
 	org.tizen.system.deviced.SysNoti.udev                       root only
 	org.tizen.system.deviced.SysNoti.factorymode                root only
 	org.tizen.system.deviced.SysNoti.control                    root only
-Mmc
-	org.tizen.system.deviced.Mmc.RequestMount                   *
-	org.tizen.system.deviced.Mmc.RequestUnmount                 *
-	org.tizen.system.deviced.Mmc.RequestFormat                  *
-
+Usbhost
+	org.tizen.system.deviced.Usbhost.StorageInfoAll             deviced::usbhost
+	org.tizen.system.deviced.Usbhost.StorageMount               deviced::usbhost
+	org.tizen.system.deviced.Usbhost.StorageUnmount             deviced::usbhost
+	org.tizen.system.deviced.Usbhost.StorageFormat              deviced::usbhost

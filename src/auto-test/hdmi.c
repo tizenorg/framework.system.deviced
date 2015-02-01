@@ -33,7 +33,7 @@ static int test_hdmi(void)
 {
 	DBusError err;
 	DBusMessage *msg;
-	int ret, level;
+	int ret, val;
 
 	msg = dbus_method_sync_with_reply(DEVICED_BUS_NAME,
 			DEVICED_PATH_SYSNOTI,
@@ -48,24 +48,28 @@ static int test_hdmi(void)
 
 	dbus_error_init(&err);
 
-	ret = dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &level,
+	ret = dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &val,
 			DBUS_TYPE_INVALID);
 	if (!ret) {
 		_E("no message : [%s:%s]", err.name, err.message);
-		level = -1;
+		val = -1;
 	}
-	_I("%d", level);
+	_I("%d", val);
+	if (val < 0)
+		_R("[NG] ---- %s", __func__);
+	else
+		_R("[OK] ---- %s        : V(%d)", __func__, val);
 	dbus_message_unref(msg);
 	dbus_error_free(&err);
 	sleep(TEST_WAIT_TIME_INTERVAL);
-	return level;
+	return val;
 }
 
 static int test_hdcp(void)
 {
 	DBusError err;
 	DBusMessage *msg;
-	int ret, level;
+	int ret, val;
 
 	msg = dbus_method_sync_with_reply(DEVICED_BUS_NAME,
 			DEVICED_PATH_SYSNOTI,
@@ -80,24 +84,28 @@ static int test_hdcp(void)
 
 	dbus_error_init(&err);
 
-	ret = dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &level,
+	ret = dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &val,
 			DBUS_TYPE_INVALID);
 	if (!ret) {
 		_E("no message : [%s:%s]", err.name, err.message);
-		level = -1;
+		val = -1;
 	}
-	_I("%d", level);
+	_I("%d", val);
+	if (val < 0)
+		_R("[NG] ---- %s", __func__);
+	else
+		_R("[OK] ---- %s        : V(%d)", __func__, val);
 	dbus_message_unref(msg);
 	dbus_error_free(&err);
 	sleep(TEST_WAIT_TIME_INTERVAL);
-	return level;
+	return val;
 }
 
 static int test_hdmi_audio(void)
 {
 	DBusError err;
 	DBusMessage *msg;
-	int ret, level;
+	int ret, val;
 
 	msg = dbus_method_sync_with_reply(DEVICED_BUS_NAME,
 			DEVICED_PATH_SYSNOTI,
@@ -112,24 +120,28 @@ static int test_hdmi_audio(void)
 
 	dbus_error_init(&err);
 
-	ret = dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &level,
+	ret = dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &val,
 			DBUS_TYPE_INVALID);
 	if (!ret) {
 		_E("no message : [%s:%s]", err.name, err.message);
-		level = -1;
+		val = -1;
 	}
-	_I("%d", level);
+	_I("%d", val);
+	if (val < 0)
+		_R("[NG] ---- %s", __func__);
+	else
+		_R("[OK] ---- %s  : V(%d)", __func__, val);
 	dbus_message_unref(msg);
 	dbus_error_free(&err);
 	sleep(TEST_WAIT_TIME_INTERVAL);
-	return level;
+	return val;
 }
 
-static int test(int index)
+static int hdmi(int index)
 {
 	DBusError err;
 	DBusMessage *msg;
-	int ret, ret_val;
+	int ret, val;
 	char *param[4];
 
 	param[0] = METHOD_SET_DEVICE;
@@ -150,17 +162,22 @@ static int test(int index)
 
 	dbus_error_init(&err);
 
-	ret = dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &ret_val, DBUS_TYPE_INVALID);
+	ret = dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &val, DBUS_TYPE_INVALID);
 	if (ret == 0) {
 		_E("no message : [%s:%s]", err.name, err.message);
 		dbus_error_free(&err);
-		ret_val = -EBADMSG;
+		val = -EBADMSG;
 	}
 	_I("%s %s", device_change_types[index].name, device_change_types[index].status);
+	if (val < 0)
+		_R("[NG] ---- %s", __func__);
+	else
+		_R("[OK] ---- %s             : V(%s %s)",
+		__func__, device_change_types[index].name, device_change_types[index].status);
 	dbus_message_unref(msg);
 	dbus_error_free(&err);
 	sleep(TEST_WAIT_TIME_INTERVAL);
-	return ret_val;
+	return val;
 }
 
 static void unit(char *unit, char *status)
@@ -171,7 +188,7 @@ static void unit(char *unit, char *status)
 		if (strcmp(unit, device_change_types[index].name) != 0 ||
 		    strcmp(status, device_change_types[index].status) != 0)
 			continue;
-		test(index);
+		hdmi(index);
 	}
 }
 
@@ -181,7 +198,7 @@ static void hdmi_init(void *data)
 
 	_I("start test");
 	for (index = 0; index < ARRAY_SIZE(device_change_types); index++) {
-		test(index);
+		hdmi(index);
 		test_hdmi();
 		test_hdcp();
 		test_hdmi_audio();

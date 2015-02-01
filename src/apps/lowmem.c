@@ -36,7 +36,7 @@ static int lowmem_launch(void *data)
 	param[0] = params->key;
 	param[1] = params->value;
 
-	return dbus_method_sync(POPUP_BUS_NAME,
+	return dbus_method_async(POPUP_BUS_NAME,
 			POPUP_PATH_LOWMEM,
 			POPUP_INTERFACE_LOWMEM,
 			POPUP_METHOD_LAUNCH, "ss", param);

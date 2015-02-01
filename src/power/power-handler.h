@@ -19,10 +19,20 @@
 #ifndef __POWER_HANDLE_H__
 #define __POWER_HANDLE_H__
 
-#define PREDEF_POWEROFF         "poweroff"
-#define PREDEF_REBOOT           "reboot"
-#define PREDEF_RECOVERY         "reboot-recovery"
-#define PREDEF_FOTA_REBOOT      "fota"
+#define POWER_OPS_NAME      "power"
+
+#define POWER_POWEROFF      "poweroff"
+#define POWER_POWEROFF_LEN  8
+#define POWER_REBOOT        "reboot"
+#define POWER_REBOOT_LEN    6
+#define POWER_RECOVERY      "reboot-recovery"
+#define POWER_RECOVERY_LEN  15
+#define POWER_FOTA          "fota"
+#define POWER_FOTA_LEN      4
+#define PWROFF_POPUP        "pwroff-popup"
+#define PWROFF_POPUP_LEN    12
+#define INTERNAL_PWROFF     "internal"
+#define INTERNAL_PWROFF_LEN 8
 
 #define SYSTEMD_STOP_POWER_RESTART              5
 #define SYSTEMD_STOP_POWER_RESTART_RECOVERY     6

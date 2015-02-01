@@ -25,16 +25,16 @@
 #include "core.h"
 #include "util.h"
 #include "setting.h"
+#include "weaks.h"
 
-#define LCD_DIM_RATIO		0.2
+#define LCD_DIM_RATIO		0.3
 #define LCD_MAX_DIM_TIMEOUT	7000
+#define LCD_MIN_DIM_TIMEOUT	500
 
 static const char *setting_keys[SETTING_GET_END] = {
 	[SETTING_TO_NORMAL] = VCONFKEY_SETAPPL_LCD_TIMEOUT_NORMAL,
 	[SETTING_BRT_LEVEL] = VCONFKEY_SETAPPL_LCD_BRIGHTNESS,
 	[SETTING_LOCK_SCREEN] = VCONFKEY_IDLE_LOCK_STATE,
-	[SETTING_POWER_SAVING] = VCONFKEY_SETAPPL_PWRSV_SYSMODE_STATUS,
-	[SETTING_POWER_SAVING_DISPLAY] = VCONFKEY_SETAPPL_PWRSV_CUSTMODE_DISPLAY,
 	[SETTING_SMART_STAY] = VCONFKEY_SETAPPL_SMARTSCREEN_SMARTSTAY_STATUS,
 	[SETTING_BOOT_POWER_ON_STATUS] = VCONFKEY_DEVICED_BOOT_POWER_ON_STATUS,
 	[SETTING_POWER_CUSTOM_BRIGHTNESS] = VCONFKEY_PM_CUSTOM_BRIGHTNESS_STATUS,
@@ -122,6 +122,12 @@ int get_dim_timeout(int *dim_timeout)
 		return 0;
 	}
 
+	if (get_ambient_mode != NULL &&
+	    get_ambient_mode() == true) {
+		*dim_timeout = LCD_MIN_DIM_TIMEOUT;
+		return 0;
+	}
+
 	ret = vconf_get_int(setting_keys[SETTING_TO_NORMAL], &vconf_timeout);
 	if (ret != 0) {
 		_E("Failed ro get setting timeout!");
@@ -165,14 +171,17 @@ int get_run_timeout(int *timeout)
 	else
 		on_timeout = SEC_TO_MSEC(vconf_timeout);
 
+	if (on_timeout < 0)
+		return -ERANGE;
+
+	if (on_timeout == 0) {
+		*timeout = on_timeout;
+		return 0;
+	}
+
 	get_dim_timeout(&dim_timeout);
-
-	if (on_timeout <= 0)
-		ret = -ERANGE;
-	else
-		*timeout = on_timeout - dim_timeout;
-
-	return ret;
+	*timeout = on_timeout - dim_timeout;
+	return 0;
 }
 
 int set_custom_lcdon_timeout(int timeout)
@@ -207,8 +216,6 @@ static int setting_cb(keynode_t *key_nodes, void *data)
 	}
 	if (update_pm_setting != NULL) {
 		switch((int)data) {
-			case SETTING_POWER_SAVING:
-			case SETTING_POWER_SAVING_DISPLAY:
 			case SETTING_ACCESSIBILITY_TTS:
 				update_pm_setting((int)data, vconf_keynode_get_bool(tmp));
 				break;

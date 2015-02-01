@@ -31,7 +31,6 @@
 #include <Ecore.h>
 
 #include "core/log.h"
-#include "core/data.h"
 #include "core/common.h"
 #include "core/devices.h"
 #include "core/device-notifier.h"
@@ -39,15 +38,31 @@
 #include "hall-handler.h"
 
 #define SIGNAL_HALL_STATE	"ChangeState"
+#define HALL_PMQOS_TIME		1000 //ms
+enum hall_ic_init_type{
+	HALL_IC_NOT_READY = 0,
+	HALL_IC_INITIALIZED = 1,
+};
 
 static int hall_ic_status = HALL_IC_OPENED;
+static int hall_ic_initialized = HALL_IC_NOT_READY;
 
 static int hall_ic_get_status(void)
 {
+	int ret;
+	int val = HALL_IC_OPENED;
+
+	if (hall_ic_initialized == HALL_IC_INITIALIZED)
+		return hall_ic_status;
+
+	ret = device_get_property(DEVICE_TYPE_HALL, PROP_HALL_STATUS, &val);
+	if (ret == 0 && (val == HALL_IC_OPENED || val == HALL_IC_CLOSED))
+		hall_ic_status = val;
+
 	return hall_ic_status;
 }
 
-static void hall_ic_chgdet_cb(struct main_data *ad)
+static void hall_ic_chgdet_cb(void)
 {
 	int val = -1;
 	int fd, r, ret;
@@ -69,7 +84,13 @@ static void hall_ic_chgdet_cb(struct main_data *ad)
 
 	buf[1] = '\0';
 
-	hall_ic_status = atoi(buf);
+	hall_ic_initialized = HALL_IC_INITIALIZED;
+
+	val = atoi(buf);
+	if (val != HALL_IC_OPENED && val != HALL_IC_CLOSED)
+		val = HALL_IC_OPENED;
+	hall_ic_status = val;
+
 	_I("cover is opened(%d)", hall_ic_status);
 
 	device_notify(DEVICE_NOTIFIER_HALLIC_OPEN, (void *)hall_ic_status);
@@ -94,17 +115,6 @@ static void hall_ic_chgdet_cb(struct main_data *ad)
 
 }
 
-static int hall_action(int argc, char **argv)
-{
-	int i;
-	int pid;
-	int prop;
-
-	if (strncmp(argv[0], HALL_IC_NAME, strlen(HALL_IC_NAME)) == 0)
-		hall_ic_chgdet_cb(NULL);
-	return 0;
-}
-
 static void hall_edbus_signal_handler(void *data, DBusMessage *msg)
 {
 	_D("hall_edbus_signal_handler occurs!!!");
@@ -114,17 +124,13 @@ static DBusMessage *edbus_getstatus_cb(E_DBus_Object *obj, DBusMessage *msg)
 {
 	DBusMessageIter iter;
 	DBusMessage *reply;
-	int val, ret;
+	int val;
 
-	ret = device_get_property(DEVICE_TYPE_HALL, PROP_HALL_STATUS, &val);
-	if (ret >= 0)
-		ret = val;
-
-	_D("get hall status %d, %d", val, ret);
-
+	val = hall_ic_get_status();
+	_D("get hall status %d", val);
 	reply = dbus_message_new_method_return(msg);
 	dbus_message_iter_init_append(reply, &iter);
-	dbus_message_iter_append_basic(&iter, DBUS_TYPE_INT32, &ret);
+	dbus_message_iter_append_basic(&iter, DBUS_TYPE_INT32, &val);
 	return reply;
 }
 
@@ -142,21 +148,26 @@ static void hall_ic_init(void *data)
 	if (ret < 0)
 		_E("fail to init edbus method(%d)", ret);
 
-	register_action(PREDEF_HALL_IC, hall_action, NULL, NULL);
-
 	register_edbus_signal_handler(DEVICED_PATH_HALL, DEVICED_INTERFACE_HALL,
 			SIGNAL_HALL_STATE,
 			hall_edbus_signal_handler);
+	val = hall_ic_get_status();
+	_D("get hall status %d", val);
+}
 
-	if (device_get_property(DEVICE_TYPE_HALL, PROP_HALL_STATUS, &val) >= 0)
-		hall_ic_status = val;
+static int hall_ic_execute(void *data)
+{
+	device_notify(DEVICE_NOTIFIER_PMQOS_HALL, (void*)HALL_PMQOS_TIME);
+	hall_ic_chgdet_cb();
+	return 0;
 }
 
 static const struct device_ops hall_device_ops = {
-	.priority	= DEVICE_PRIORITY_NORMAL,
-	.name		= HALL_IC_NAME,
-	.init		= hall_ic_init,
-	.status		= hall_ic_get_status,
+	.priority = DEVICE_PRIORITY_NORMAL,
+	.name     = HALL_IC_NAME,
+	.init     = hall_ic_init,
+	.status   = hall_ic_get_status,
+	.execute  = hall_ic_execute,
 };
 
 DEVICE_OPS_REGISTER(&hall_device_ops)

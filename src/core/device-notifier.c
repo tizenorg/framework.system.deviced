@@ -22,6 +22,10 @@
 #include "device-notifier.h"
 #include "list.h"
 #include "common.h"
+#include <journal/system.h>
+
+#define LATE_INIT_WAIT_TIME	12
+#define DEFAULT_LATE_INIT_VALUE	((Ecore_Timer *)0x0DEF0DEF)
 
 struct device_notifier {
 	enum device_notifier_type status;
@@ -29,6 +33,7 @@ struct device_notifier {
 };
 
 static dd_list *device_notifier_list;
+static Ecore_Timer *late_init_timer = DEFAULT_LATE_INIT_VALUE;
 
 #define FIND_NOTIFIER(a, b, d, e, f) \
 	DD_LIST_FOREACH(a, b, d) \
@@ -101,6 +106,60 @@ void device_notify(enum device_notifier_type status, void *data)
 	}
 }
 
+static void late_init_stop(void)
+{
+	if (late_init_timer == NULL ||
+	    late_init_timer == DEFAULT_LATE_INIT_VALUE)
+		return;
+	ecore_timer_del(late_init_timer);
+	late_init_timer = NULL;
+}
+
+static int booting_done(void *data)
+{
+	static int done = 0;
+
+	if (data == NULL)
+		goto out;
+
+	journal_system_booting_done();
+	done = (int)data;
+	if (late_init_timer == NULL)
+		return done;
+	late_init_stop();
+out:
+	return done;
+}
+
+static Eina_Bool late_init_timer_cb(void *data)
+{
+	int done;
+
+	late_init_stop();
+	done = booting_done(NULL);
+	if (done)
+		return EINA_FALSE;
+	_I("late booting done");
+	device_notify(DEVICE_NOTIFIER_BOOTING_DONE, (void *)TRUE);
+	return EINA_FALSE;
+}
+
+static void device_notifier_init(void *data)
+{
+	int ret;
+
+	ret = check_systemd_active();
+	if (ret == TRUE) {
+		_I("restart booting done");
+		return;
+	}
+	register_notifier(DEVICE_NOTIFIER_BOOTING_DONE, booting_done);
+	late_init_timer = ecore_timer_add(LATE_INIT_WAIT_TIME,
+						late_init_timer_cb, NULL);
+	if (!late_init_timer)
+		late_init_timer = DEFAULT_LATE_INIT_VALUE;
+}
+
 static void device_notifier_exit(void *data)
 {
 	dd_list *n;
@@ -114,6 +173,7 @@ static void device_notifier_exit(void *data)
 static const struct device_ops notifier_device_ops = {
 	.priority = DEVICE_PRIORITY_NORMAL,
 	.name     = "notifier",
+	.init     = device_notifier_init,
 	.exit     = device_notifier_exit,
 };
 
