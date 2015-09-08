@@ -1,0 +1,9 @@
+[Unit]
+Description=Broadcasing Shutdown
+DefaultDependencies=no
+
+[Service]
+ExecStart=/usr/bin/dbus-send --type=signal --system --dest=org.tizen.system.deviced.PowerOff /Org/Tizen/System/DeviceD/PowerOff org.tizen.system.deviced.PowerOff.ChangeState int32:2
+
+[Install]
+WantedBy=shutdown.target
