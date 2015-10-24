@@ -22,7 +22,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <errno.h>
-#include <dbus/dbus-glib-lowlevel.h>
+#include <E_DBus.h>
 
 #include "common.h"
 #include "log.h"
@@ -30,11 +30,6 @@
 
 /* -1 is a default timeout value, it's converted to 25*1000 internally. */
 #define DBUS_REPLY_TIMEOUT	(-1)
-
-struct pending_call_data {
-	dbus_pending_cb func;
-	void *data;
-};
 
 int append_variant(DBusMessageIter *iter, const char *sig, char *param[])
 {
@@ -49,10 +44,10 @@ int append_variant(DBusMessageIter *iter, const char *sig, char *param[])
 	if (!sig || !param)
 		return 0;
 
-	for (ch = (char*)sig, i = 0; *ch != '\0'; ++i, ++ch) {
+	for (ch = (char *)sig, i = 0; *ch != '\0'; ++i, ++ch) {
 		switch (*ch) {
 		case 'b':
-			bool_type = (atoi(param[i])) ? TRUE:FALSE;
+			bool_type = (atoi(param[i])) ? TRUE : FALSE;
 			dbus_message_iter_append_basic(iter, DBUS_TYPE_BOOLEAN, &bool_type);
 			break;
 		case 'i':
@@ -75,7 +70,7 @@ int append_variant(DBusMessageIter *iter, const char *sig, char *param[])
 			switch (*ch) {
 			case 'y':
 				dbus_message_iter_open_container(iter, DBUS_TYPE_ARRAY, DBUS_TYPE_BYTE_AS_STRING, &arr);
-				byte = (struct dbus_byte*)param[i];
+				byte = (struct dbus_byte *)param[i];
 				dbus_message_iter_append_fixed_array(&arr, DBUS_TYPE_BYTE, &(byte->data), byte->size);
 				dbus_message_iter_close_container(iter, &arr);
 				break;
@@ -241,70 +236,21 @@ int dbus_method_async(const char *dest, const char *path,
 	return 0;
 }
 
-static void cb_pending(DBusPendingCall *pending, void *user_data)
-{
-	DBusMessage *msg;
-	DBusError err;
-	struct pending_call_data *data = user_data;
-	int ret;
-
-	ret = dbus_pending_call_get_completed(pending);
-	if (!ret) {
-		_I("dbus_pending_call_get_completed() fail");
-		dbus_pending_call_unref(pending);
-		return;
-	}
-
-	dbus_error_init(&err);
-	msg = dbus_pending_call_steal_reply(pending);
-	if (!msg) {
-		_E("no message : [%s:%s]", err.name, err.message);
-
-		if (data->func) {
-			dbus_set_error(&err, "org.tizen.system.deviced.NoReply",
-					"There was no reply to this method call");
-			data->func(data->data, NULL, &err);
-			dbus_error_free(&err);
-		}
-		return;
-	}
-
-	ret = dbus_set_error_from_message(&err, msg);
-	if (ret) {
-		_E("error msg : [%s:%s]", err.name, err.message);
-
-		if (data->func)
-			data->func(data->data, NULL, &err);
-		dbus_error_free(&err);
-	} else {
-		if (data->func)
-			data->func(data->data, msg, &err);
-	}
-
-	dbus_message_unref(msg);
-	dbus_pending_call_unref(pending);
-}
-
 int dbus_method_async_with_reply(const char *dest, const char *path,
 		const char *interface, const char *method,
 		const char *sig, char *param[], dbus_pending_cb cb, int timeout, void *data)
 {
-	DBusConnection *conn;
+	E_DBus_Connection *conn;
 	DBusMessage *msg;
 	DBusMessageIter iter;
-	DBusPendingCall *pending = NULL;
-	struct pending_call_data *pdata;
+	DBusPendingCall *pending;
 	int ret;
 
-	conn = dbus_bus_get(DBUS_BUS_SYSTEM, NULL);
+	conn = e_dbus_bus_get(DBUS_BUS_SYSTEM);
 	if (!conn) {
 		_E("dbus_bus_get error");
 		return -EPERM;
 	}
-
-	/* this function should be invoked to receive dbus messages
-	 * does nothing if it's already been done */
-	dbus_connection_setup_with_g_main(conn, NULL);
 
 	msg = dbus_message_new_method_call(dest, path, interface, method);
 	if (!msg) {
@@ -322,8 +268,8 @@ int dbus_method_async_with_reply(const char *dest, const char *path,
 		return ret;
 	}
 
-	ret = dbus_connection_send_with_reply(conn, msg, &pending, timeout);
-	if (!ret) {
+	pending = e_dbus_message_send(conn, msg, cb, timeout, data);
+	if (!pending) {
 		dbus_message_unref(msg);
 		_E("dbus_connection_send error(%s %s:%s-%s)",
 			dest, path, interface, method);
@@ -331,23 +277,6 @@ int dbus_method_async_with_reply(const char *dest, const char *path,
 	}
 
 	dbus_message_unref(msg);
-
-	if (cb && pending) {
-		pdata = malloc(sizeof(struct pending_call_data));
-		if (!pdata)
-			return -ENOMEM;
-
-		pdata->func = cb;
-		pdata->data = data;
-
-		ret = dbus_pending_call_set_notify(pending, cb_pending, pdata, free);
-		if (!ret) {
-			free(pdata);
-			dbus_pending_call_cancel(pending);
-			return -ECOMM;
-		}
-	}
-
 	return 0;
 }
 

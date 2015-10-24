@@ -25,6 +25,7 @@
 #include <vconf.h>
 #include <assert.h>
 #include <limits.h>
+#include <time.h>
 #include <vconf.h>
 #include <fcntl.h>
 #include <sys/reboot.h>
@@ -32,26 +33,30 @@
 #include <mntent.h>
 #include <sys/mount.h>
 #include <device-node.h>
-#include <journal/system.h>
+#include <bundle.h>
+#include <eventsystem.h>
+
 #include "dd-deviced.h"
 #include "core/log.h"
 #include "core/launch.h"
-#include "core/device-handler.h"
 #include "core/device-notifier.h"
-#include "core/device-idler.h"
 #include "core/common.h"
 #include "core/devices.h"
 #include "proc/proc-handler.h"
 #include "display/poll.h"
 #include "display/setting.h"
 #include "core/edbus-handler.h"
+#include "core/config-parser.h"
 #include "display/core.h"
 #include "power-handler.h"
-#include "hall/hall-handler.h"
+#include "extcon/hall.h"
+#include "apps/apps.h"
 
 #define SIGNAL_NAME_POWEROFF_POPUP	"poweroffpopup"
 #define SIGNAL_BOOTING_DONE		"BootingDone"
+#define SIGNAL_EARLY_BOOTING_DONE		"EarlyBootingDone"
 
+#define POWEROFF_NOTI_NAME		"power_off_start"
 #define POWEROFF_DURATION		2
 #define MAX_RETRY			2
 
@@ -60,18 +65,20 @@
 #define POWEROFF_POPUP_NAME	"poweroff-syspopup"
 #define UMOUNT_RW_PATH "/opt/usr"
 
-struct popup_data {
-	char *name;
-	char *key;
+#define POWER_CONF_PATH			"/etc/deviced/power.conf"
+
+static void poweroff_control_cb(keynode_t *in_key, void *data);
+
+struct power_config {
+	int check_umount;
 };
 
+static struct power_config power_conf;
 static struct timeval tv_start_poweroff;
 
-static int power_off = 0;
-static const struct device_ops *telephony = NULL;
-static const struct device_ops *hall_ic = NULL;
-
-static int power_execute(void *data);
+static int power_off;
+static const struct device_ops *telephony;
+static const struct device_ops *hall_ic;
 
 static void telephony_init(void)
 {
@@ -98,205 +105,20 @@ static int telephony_exit(void *data)
 	return ret;
 }
 
-static int systemd_manager_object(const char *opt, char **param)
+static void system_shutdown_send_system_event(void)
 {
-	return dbus_method_async("org.freedesktop.systemd1",
-				 "/org/freedesktop/systemd1",
-				 "org.freedesktop.systemd1.Manager",
-				 opt,
-				 "ss", param);
-}
+	bundle *b;
+	const char *str = EVT_KEY_SYSTEM_SHUTDOWN;
 
-static int systemd_manager_object_start_unit(char **param)
-{
-	return systemd_manager_object("StartUnit", param);
-}
-
-static int systemd_manager_object_stop_unit(char **param)
-{
-	return systemd_manager_object("StopUnit", param);
-}
-
-static int stop_systemd_journald(void)
-{
-	char *journal_socket[2]	 = { "systemd-journald.socket",	   "replace" };
-	char *journal_service[2] = { "systemd-journald.service",   "replace" };
-
-	int ret = 0;
-
-	ret = systemd_manager_object_stop_unit(journal_socket);
-	if (ret < 0) {
-		_E("failed to stop 'systemd-journald.socket'");
-		return ret;
-	}
-	ret |= systemd_manager_object_stop_unit(journal_service);
-	if (ret < 0) {
-		_E("failed to stop 'systemd-journald.service'");
-		return ret;
-	}
-
-	return 0;
-}
-
-static int hall_ic_status(void)
-{
-	int ret;
-
-	ret = device_get_status(hall_ic);
-	if (ret < 0)
-		return HALL_IC_OPENED;
-	return ret;
-}
-
-static void poweroff_start_animation(void)
-{
-	char params[128];
-	snprintf(params, sizeof(params), "/usr/bin/boot-animation --stop --clear");
-	launch_app_cmd_with_nice(params, -20);
-	launch_evenif_exist("/usr/bin/sound_server", "--poweroff");
-	device_notify(DEVICE_NOTIFIER_POWEROFF_HAPTIC, NULL);
-}
-
-int previous_poweroff(void)
-{
-	int ret;
-	static const struct device_ops *display_device_ops = NULL;
-
-	telephony_start();
-
-	FIND_DEVICE_INT(display_device_ops, "display");
-
-	display_device_ops->exit(NULL);
-	sync();
-
-	gettimeofday(&tv_start_poweroff, NULL);
-
-	ret = telephony_exit(POWER_POWEROFF);
-
-	if (ret < 0) {
-		powerdown_ap(NULL);
-		return 0;
-	}
-	return ret;
-}
-
-static int poweroff(void)
-{
-	int retry_count = 0;
-	poweroff_start_animation();
-	while (retry_count < MAX_RETRY) {
-		if (previous_poweroff() < 0) {
-			_E("failed to request poweroff to deviced");
-			retry_count++;
-			continue;
-		}
-		return 0;
-	}
-	return -1;
-}
-
-static int pwroff_popup(void)
-{
-	struct popup_data *params;
-	static const struct device_ops *apps = NULL;
-	int val;
-
-	val = hall_ic_status();
-	if (val == HALL_IC_CLOSED) {
-		_I("cover is closed");
-		return 0;
-	}
-
-	FIND_DEVICE_INT(apps, "apps");
-
-	params = malloc(sizeof(struct popup_data));
-	if (params == NULL) {
-		_E("Malloc failed");
-		return -1;
-	}
-	params->name = POWEROFF_POPUP_NAME;
-	apps->init((void *)params);
-	free(params);
-	return 0;
-}
-
-static int power_reboot(void)
-{
-	int ret;
-
-	const struct device_ops *display_device_ops = NULL;
-	poweroff_start_animation();
-	telephony_start();
-
-	FIND_DEVICE_INT(display_device_ops, "display");
-
-	pm_change_internal(getpid(), LCD_NORMAL);
-	display_device_ops->exit(NULL);
-	sync();
-
-	gettimeofday(&tv_start_poweroff, NULL);
-
-	ret = telephony_exit(POWER_REBOOT);
-	if (ret < 0) {
-		restart_ap(NULL);
-		return 0;
-	}
-	return ret;
-}
-
-static void poweroff_popup_edbus_signal_handler(void *data, DBusMessage *msg)
-{
-	DBusError err;
-	char *str;
-	int val = 0;
-
-	if (dbus_message_is_signal(msg, DEVICED_INTERFACE_NAME, SIGNAL_NAME_POWEROFF_POPUP) == 0) {
-		_E("there is no power off popup signal");
-		return;
-	}
-
-	dbus_error_init(&err);
-
-	if (dbus_message_get_args(msg, &err, DBUS_TYPE_STRING, &str, DBUS_TYPE_INVALID) == 0) {
-		_E("there is no message");
-		return;
-	}
-
-	power_execute(str);
-}
-
-static int booting_done(void *data)
-{
-	static int done = 0;
-
-	if (data == NULL)
-		goto out;
-
-	done = (int)data;
-	telephony_init();
-out:
-	return done;
-}
-
-static void booting_done_edbus_signal_handler(void *data, DBusMessage *msg)
-{
-	int done;
-
-	if (!dbus_message_is_signal(msg, DEVICED_INTERFACE_CORE, SIGNAL_BOOTING_DONE)) {
-		_E("there is no bootingdone signal");
-		return;
-	}
-	done = booting_done(NULL);
-	if (done)
-		return;
-
-	_I("signal booting done");
-	device_notify(DEVICE_NOTIFIER_BOOTING_DONE, (void *)TRUE);
+	b = bundle_create();
+	bundle_add_str(b, EVT_VAL_SYSTEM_SHUTDOWN_TRUE, str);
+	eventsystem_send_system_event(SYS_EVENT_SYSTEM_SHUTDOWN, b);
+	bundle_free(b);
 }
 
 static void poweroff_send_broadcast(int status)
 {
-	static int old = 0;
+	static int old;
 	char *arr[1];
 	char str_status[32];
 
@@ -317,96 +139,63 @@ static void poweroff_stop_systemd_service(void)
 {
 	char buf[256];
 	_D("systemd service stop");
-	umount2("/sys/fs/cgroup", MNT_FORCE |MNT_DETACH);
+	umount2("/sys/fs/cgroup", MNT_FORCE|MNT_DETACH);
 }
 
-static void poweroff_idler_cb(void *data)
-{
-	enum poweroff_type val = (int)data;
-	int ret;
-	int recovery;
-
-	telephony_start();
-
-	pm_lock_internal(INTERNAL_LOCK_POWEROFF, LCD_OFF, STAY_CUR_STATE, 0);
-	poweroff_stop_systemd_service();
-
-	if (val == POWER_OFF_DIRECT || val == POWER_OFF_RESTART) {
-		poweroff_send_broadcast(val);
-		device_notify(DEVICE_NOTIFIER_POWEROFF, (void *)val);
-	}
-
-	/* TODO for notify. will be removed asap. */
-	vconf_set_int(VCONFKEY_SYSMAN_POWER_OFF_STATUS, val);
-
-	switch (val) {
-	case POWER_OFF_DIRECT:
-		poweroff();
-		break;
-	case POWER_OFF_POPUP:
-		pwroff_popup();
-		break;
-	case POWER_OFF_RESTART:
-		power_reboot();
-		break;
-	}
-
-	if (update_pm_setting)
-		update_pm_setting(SETTING_POWEROFF, val);
-}
-
-static int power_execute(void *data)
+static int stop_systemd_journald(void)
 {
 	int ret;
-	int val;
 
-	if (!data) {
-		_E("Invalid parameter : data(NULL)");
-		return -EINVAL;
-	}
-
-	if (strncmp(POWER_POWEROFF, (char *)data, POWER_POWEROFF_LEN) == 0)
-		val = POWER_OFF_DIRECT;
-	else if (strncmp(PWROFF_POPUP, (char *)data, PWROFF_POPUP_LEN) == 0)
-		val = POWER_OFF_POPUP;
-	else if (strncmp(POWER_REBOOT, (char *)data, POWER_REBOOT_LEN) == 0)
-		val = POWER_OFF_RESTART;
-	else {
-		_E("Invalid parameter : data(%s)", (char *)data);
-		return -EINVAL;
-	}
-
-	ret = add_idle_request(poweroff_idler_cb, (int*)val);
+	ret = deviced_systemd_stop_unit("systemd-journald.socket");
 	if (ret < 0) {
-		_E("fail to add poweroff idle request : %d", ret);
+		_E("failed to stop 'systemd-journald.socket'");
+		return ret;
+	}
+
+	ret |= deviced_systemd_stop_unit("systemd-journald.service");
+	if (ret < 0) {
+		_E("failed to stop 'systemd-journald.service'");
 		return ret;
 	}
 
 	return 0;
 }
 
+static int hall_ic_status(void)
+{
+	int ret;
+
+	ret = device_get_status(hall_ic);
+	if (ret < 0)
+		return HALL_IC_OPENED;
+	return ret;
+}
+
 /* umount usr data partition */
 static void unmount_rw_partition()
 {
 	int retry = 0;
+	struct timespec time = {0,};
+
 	sync();
-#ifdef MICRO_DD
-	if (!mount_check(UMOUNT_RW_PATH))
-		return;
-#endif
+	if (power_conf.check_umount)
+		if (!mount_check(UMOUNT_RW_PATH))
+			return;
 	while (1) {
 		switch (retry++) {
 		case 0:
 			/* Second, kill app with SIGTERM */
 			_I("Kill app with SIGTERM");
 			terminate_process(UMOUNT_RW_PATH, false);
-			sleep(3);
+			time.tv_nsec = 700 * NANO_SECOND_MULTIPLIER;
+			nanosleep(&time, NULL);
 			break;
 		case 1:
 			/* Last time, kill app with SIGKILL */
 			_I("Kill app with SIGKILL");
 			terminate_process(UMOUNT_RW_PATH, true);
-			sleep(1);
+			time.tv_nsec = 300 * NANO_SECOND_MULTIPLIER;
+			nanosleep(&time, NULL);
 			break;
 		default:
 			if (umount2(UMOUNT_RW_PATH, 0) != 0) {
@@ -416,7 +205,7 @@ static void unmount_rw_partition()
 			_I("%s unmounted successfully", UMOUNT_RW_PATH);
 			return;
 		}
-		if (umount2(UMOUNT_RW_PATH, 0) == 0) {
+		if (umount2(UMOUNT_RW_PATH, MNT_DETACH) == 0) {
 			_I("%s unmounted successfully", UMOUNT_RW_PATH);
 			return;
 		}
@@ -425,21 +214,16 @@ static void unmount_rw_partition()
 
 static void powerdown(void)
 {
-	static int wait = 0;
+	static int wait;
 	struct timeval now;
 	int poweroff_duration = POWEROFF_DURATION;
 	int check_duration = 0;
 	char *buf;
+	struct timespec time = {0, 100 * NANO_SECOND_MULTIPLIER};
 
-	if (power_off == 1) {
-		_E("during power off");
-		return;
-	}
-	journal_system_shutdown();
 	/* if this fails, that's OK */
 	stop_systemd_journald();
 	telephony_stop();
-	power_off = 1;
 	sync();
 
 	buf = getenv("PWROFF_DUR");
@@ -454,7 +238,7 @@ static void powerdown(void)
 			_I("wait poweroff %d %d", check_duration, poweroff_duration);
 			wait = 1;
 		}
-		usleep(100000);
+		nanosleep(&time, NULL);
 		gettimeofday(&now, NULL);
 		check_duration = now.tv_sec - tv_start_poweroff.tv_sec;
 		if (check_duration < 0)
@@ -465,17 +249,295 @@ static void powerdown(void)
 #endif
 }
 
-int reset_resetkey_disable(char *name, enum watch_id id)
+void powerdown_ap(void *data)
+{
+	_I("Power off");
+	powerdown();
+	reboot(RB_POWER_OFF);
+}
+
+void restart_ap(int mode)
+{
+	_I("Restart %d", mode);
+	powerdown();
+	if (mode == SYSTEMD_STOP_POWER_RESTART_RECOVERY)
+		launch_evenif_exist("/usr/sbin/reboot", "recovery");
+	else if (mode == SYSTEMD_STOP_POWER_RESTART_FOTA)
+		launch_evenif_exist("/usr/sbin/reboot", "fota");
+	else
+		reboot(RB_AUTOBOOT);
+}
+
+static void poweroff_start_animation(void)
+{
+	char params[128];
+	device_notify(DEVICE_NOTIFIER_POWEROFF_HAPTIC, NULL);
+	snprintf(params, sizeof(params), "/usr/bin/boot-animation --stop --clear");
+	launch_app_cmd_with_nice(params, -20);
+	gettimeofday(&tv_start_poweroff, NULL);
+	launch_evenif_exist("/usr/bin/sound_server", "--poweroff");
+}
+
+static int poweroff(void)
+{
+	static const struct device_ops *display_device_ops;
+	int ret;
+
+	poweroff_start_animation();
+	telephony_start();
+
+	FIND_DEVICE_INT(display_device_ops, "display");
+
+	pm_change_internal(getpid(), LCD_NORMAL);
+	display_device_ops->exit(NULL);
+	sync();
+
+	ret = telephony_exit(POWER_POWEROFF);
+
+	vconf_ignore_key_changed(VCONFKEY_SYSMAN_POWER_OFF_STATUS, (void *)poweroff_control_cb);
+	if (ret < 0) {
+		powerdown_ap(NULL);
+		return 0;
+	}
+	return ret;
+}
+
+static int pwroff_popup(void)
+{
+	int val;
+
+	val = hall_ic_status();
+	if (val == HALL_IC_CLOSED) {
+		_I("cover is closed");
+		return 0;
+	}
+
+	return launch_system_app(APP_POWEROFF,
+			2, APP_KEY_TYPE, APP_POWEROFF);
+}
+
+static int power_reboot(int type)
+{
+	int ret;
+
+	const struct device_ops *display_device_ops = NULL;
+	poweroff_start_animation();
+	telephony_start();
+
+	FIND_DEVICE_INT(display_device_ops, "display");
+
+	pm_change_internal(getpid(), LCD_NORMAL);
+	display_device_ops->exit(NULL);
+	sync();
+
+	if (type == SYSTEMD_STOP_POWER_RESTART_RECOVERY)
+		ret = telephony_exit(POWER_RECOVERY);
+	else if (type == SYSTEMD_STOP_POWER_RESTART_FOTA)
+		ret = telephony_exit(POWER_FOTA);
+	else
+		ret = telephony_exit(POWER_REBOOT);
+
+	vconf_ignore_key_changed(VCONFKEY_SYSMAN_POWER_OFF_STATUS, (void *)poweroff_control_cb);
+	if (ret < 0) {
+		restart_ap(type);
+		return 0;
+	}
+	return ret;
+}
+
+static void power_off_execute(int type)
+{
+	int val;
+	int recovery;
+
+	if (power_off == VCONFKEY_SYSMAN_POWER_OFF_DIRECT || power_off == VCONFKEY_SYSMAN_POWER_OFF_RESTART) {
+		_D("during power off");
+		return;
+	}
+
+	telephony_start();
+
+	_I("poweroff %d", type);
+
+	recovery = type;
+	val = type;
+
+	if (val == SYSTEMD_STOP_POWER_OFF ||
+	    val == SYSTEMD_STOP_POWER_RESTART ||
+	    val == SYSTEMD_STOP_POWER_RESTART_RECOVERY ||
+	    val == SYSTEMD_STOP_POWER_RESTART_FOTA) {
+		pm_lock_internal(INTERNAL_LOCK_POWEROFF, LCD_OFF, STAY_CUR_STATE, 0);
+
+		if (val == SYSTEMD_STOP_POWER_OFF)
+			val = VCONFKEY_SYSMAN_POWER_OFF_DIRECT;
+		else
+			val = VCONFKEY_SYSMAN_POWER_OFF_RESTART;
+
+		poweroff_stop_systemd_service();
+
+		vconf_ignore_key_changed(VCONFKEY_SYSMAN_POWER_OFF_STATUS, (void *)poweroff_control_cb);
+		vconf_set_int(VCONFKEY_SYSMAN_POWER_OFF_STATUS, val);
+	}
+
+	power_off = val;
+	if (val == VCONFKEY_SYSMAN_POWER_OFF_DIRECT || val == VCONFKEY_SYSMAN_POWER_OFF_RESTART) {
+		system_shutdown_send_system_event();
+		poweroff_send_broadcast(val);
+	}
+
+	switch (val) {
+	case VCONFKEY_SYSMAN_POWER_OFF_DIRECT:
+		device_notify(DEVICE_NOTIFIER_POWEROFF, &val);
+		poweroff();
+		break;
+	case VCONFKEY_SYSMAN_POWER_OFF_POPUP:
+		pwroff_popup();
+		break;
+	case VCONFKEY_SYSMAN_POWER_OFF_RESTART:
+		device_notify(DEVICE_NOTIFIER_POWEROFF, &val);
+		power_reboot(recovery);
+		break;
+	}
+
+	if (update_pm_setting)
+		update_pm_setting(SETTING_POWEROFF, val);
+}
+
+static int power_execute(void *data)
+{
+	int ret = 0;
+
+	if (strncmp(POWER_POWEROFF, (char *)data, POWER_POWEROFF_LEN) == 0)
+		power_off_execute(SYSTEMD_STOP_POWER_OFF);
+	else if (strncmp(PWROFF_POPUP, (char *)data, PWROFF_POPUP_LEN) == 0)
+		ret = pwroff_popup();
+	else if (strncmp(POWER_REBOOT, (char *)data, POWER_REBOOT_LEN) == 0)
+		power_off_execute(SYSTEMD_STOP_POWER_RESTART);
+	else if (strncmp(POWER_RECOVERY, (char *)data, POWER_RECOVERY_LEN) == 0)
+		power_off_execute(SYSTEMD_STOP_POWER_RESTART_RECOVERY);
+	else if (strncmp(POWER_FOTA, (char *)data, POWER_FOTA_LEN) == 0)
+		power_off_execute(SYSTEMD_STOP_POWER_RESTART_FOTA);
+	else if (strncmp(INTERNAL_PWROFF, (char *)data, INTERNAL_PWROFF_LEN) == 0)
+		powerdown_ap(NULL);
+	return ret;
+}
+
+static void poweroff_popup_edbus_signal_handler(void *data, DBusMessage *msg)
+{
+	DBusError err;
+	char *str;
+	int ret = 0;
+
+	if (dbus_message_is_signal(msg, DEVICED_INTERFACE_NAME, SIGNAL_NAME_POWEROFF_POPUP) == 0) {
+		_E("there is no power off popup signal");
+		return;
+	}
+
+	dbus_error_init(&err);
+
+	if (dbus_message_get_args(msg, &err, DBUS_TYPE_STRING, &str, DBUS_TYPE_INVALID) == 0) {
+		_E("there is no message");
+		return;
+	}
+
+	ret = power_execute(str);
+	if (ret == 0) {
+		_E("not supported message : %s", str);
+		return;
+	}
+}
+
+static int booting_done(void *data)
+{
+	static int done;
+
+	if (data == NULL)
+		goto out;
+
+	done = *(int *)data;
+	telephony_init();
+out:
+	return done;
+}
+
+static void boot_complete_send_system_event(void)
+{
+	bundle *b;
+	const char *str = EVT_VAL_BOOT_COMPLETED_TRUE;
+
+	b = bundle_create();
+	bundle_add_str(b, EVT_KEY_BOOT_COMPLETED, str);
+	eventsystem_send_system_event(SYS_EVENT_BOOT_COMPLETED, b);
+	bundle_free(b);
+}
+
+static void booting_done_edbus_signal_handler(void *data, DBusMessage *msg)
+{
+	int done;
+
+	if (!dbus_message_is_signal(msg, DEVICED_INTERFACE_CORE, SIGNAL_BOOTING_DONE)) {
+		_E("there is no bootingdone signal");
+		return;
+	}
+
+	_I("real booting done, unlock LCD_OFF");
+	pm_unlock_internal(INTERNAL_LOCK_BOOTING, LCD_OFF, PM_SLEEP_MARGIN);
+	boot_complete_send_system_event();
+
+	done = booting_done(NULL);
+	if (done)
+		return;
+
+	_I("signal booting done");
+	done = TRUE;
+	device_notify(DEVICE_NOTIFIER_BOOTING_DONE, &done);
+}
+
+static void early_booting_done_edbus_signal_handler(void *data, DBusMessage *msg)
+{
+	int done = TRUE;
+
+	if (!dbus_message_is_signal(msg, DEVICED_INTERFACE_CORE, SIGNAL_EARLY_BOOTING_DONE)) {
+		_E("there is no early bootingdone signal");
+		return;
+	}
+	_I("signal early booting done");
+	device_notify(DEVICE_NOTIFIER_EARLY_BOOTING_DONE, &done);
+}
+
+static void poweroff_control_cb(keynode_t *in_key, void *data)
+{
+	int val;
+	int ret;
+	int recovery;
+
+	telephony_start();
+
+	if (vconf_get_int(VCONFKEY_SYSMAN_POWER_OFF_STATUS, &val) != 0)
+		return;
+
+	power_off_execute(val);
+}
+
+static void reset_resetkey_disable(const char *sender, void *data)
 {
 	_D("force reset power resetkey disable to zero");
-	return device_set_property(DEVICE_TYPE_POWER, PROP_POWER_RESETKEY_DISABLE, 0);
+	device_set_property(DEVICE_TYPE_POWER, PROP_POWER_RESETKEY_DISABLE, 0);
 }
 
 static DBusMessage *edbus_resetkeydisable(E_DBus_Object *obj, DBusMessage *msg)
 {
 	DBusMessageIter iter;
 	DBusMessage *reply;
+	const char *sender;
 	int val, ret;
+
+	sender = dbus_message_get_sender(msg);
+	if (!sender) {
+		_E("invalid sender name");
+		ret = -EINVAL;
+		goto error;
+	}
 
 	ret = dbus_message_get_args(msg, NULL, DBUS_TYPE_INT32, &val,
 			DBUS_TYPE_INVALID);
@@ -490,9 +552,9 @@ static DBusMessage *edbus_resetkeydisable(E_DBus_Object *obj, DBusMessage *msg)
 		goto error;
 
 	if (val)
-		register_edbus_watch(msg, WATCH_POWER_RESETKEY_DISABLE, reset_resetkey_disable);
+		register_edbus_watch(sender, reset_resetkey_disable, NULL);
 	else
-		unregister_edbus_watch(msg, WATCH_POWER_RESETKEY_DISABLE);
+		unregister_edbus_watch(sender, reset_resetkey_disable);
 
 	_D("get power resetkey disable %d, %d", val, ret);
 
@@ -503,17 +565,25 @@ error:
 	return reply;
 }
 
-static int reset_wakeupkey(char *name, enum watch_id id)
+static void reset_wakeupkey(const char *sender, void *data)
 {
 	_D("force reset wakeupkey to zero");
-	return device_set_property(DEVICE_TYPE_POWER, PROP_POWER_WAKEUP_KEY, 0);
+	device_set_property(DEVICE_TYPE_POWER, PROP_POWER_WAKEUP_KEY, 0);
 }
 
 static DBusMessage *edbus_set_wakeup_key(E_DBus_Object *obj, DBusMessage *msg)
 {
 	DBusMessageIter iter;
 	DBusMessage *reply;
+	const char *sender;
 	int val, ret;
+
+	sender = dbus_message_get_sender(msg);
+	if (!sender) {
+		_E("invalid sender name");
+		ret = -EINVAL;
+		goto error;
+	}
 
 	ret = dbus_message_get_args(msg, NULL,
 			DBUS_TYPE_INT32, &val,
@@ -529,9 +599,9 @@ static DBusMessage *edbus_set_wakeup_key(E_DBus_Object *obj, DBusMessage *msg)
 		goto error;
 
 	if (val)
-		register_edbus_watch(msg, WATCH_POWER_WAKEUPKEY, reset_wakeupkey);
+		register_edbus_watch(sender, reset_wakeupkey, NULL);
 	else
-		unregister_edbus_watch(msg, WATCH_POWER_WAKEUPKEY);
+		unregister_edbus_watch(sender, reset_wakeupkey);
 
 	_D("set power wakeup key %d %d", val, ret);
 
@@ -575,9 +645,40 @@ static DBusMessage *dbus_power_handler(E_DBus_Object *obj, DBusMessage *msg)
 		goto out;
 	}
 
-	ret = power_execute(type_str);
+	telephony_start();
 
+	ret = power_execute(type_str);
 out:
+	reply = dbus_message_new_method_return(msg);
+	dbus_message_iter_init_append(reply, &iter);
+	dbus_message_iter_append_basic(&iter, DBUS_TYPE_INT32, &ret);
+
+	return reply;
+}
+
+static int power_load_config(struct parse_result *result, void *user_data)
+{
+	struct power_config *conf = (struct power_config *)user_data;
+
+	if (!result)
+		return 0;
+	if (!result->section || !result->name || !result->value)
+		return 0;
+	if (MATCH(result->section, "POWER")) {
+		if (MATCH(result->name, "UmountCheck"))
+			conf->check_umount = atoi(result->value);
+	}
+	return 0;
+}
+
+static DBusMessage *dbus_get_power_status(E_DBus_Object *obj, DBusMessage *msg)
+{
+	DBusMessageIter iter;
+	DBusMessage *reply;
+	int ret;
+
+	ret = power_off;
+
 	reply = dbus_message_new_method_return(msg);
 	dbus_message_iter_init_append(reply, &iter);
 	dbus_message_iter_append_basic(&iter, DBUS_TYPE_INT32, &ret);
@@ -609,29 +710,20 @@ out:
 	return reply;
 }
 
-void powerdown_ap(void *data)
-{
-	_I("Power off");
-	powerdown();
-	reboot(RB_POWER_OFF);
-}
-
-void restart_ap(void *data)
-{
-	_I("Restart %d", (int)data);
-	journal_system_device_reboot((int)data);
-	powerdown();
-	reboot(RB_AUTOBOOT);
-}
-
 static const struct edbus_method edbus_methods[] = {
 	{ "setresetkeydisable",   "i",   "i", edbus_resetkeydisable },
 	{ "SetWakeupKey", "i", "i", edbus_set_wakeup_key },
 	{ POWER_REBOOT, "si", "i", dbus_power_handler },
+	{ POWER_RECOVERY, "si", "i", dbus_power_handler },
 	{ PWROFF_POPUP, "si", "i", dbus_power_handler },
+	{ POWER_POWEROFF, "si", "i", dbus_power_handler },
 	/* be linked to device_power_reboot() public API. */
 	{ "Reboot",      "s", "i", request_reboot },
 	/* Add methods here */
+};
+
+static const struct edbus_method poweroff_edbus_methods[] = {
+	{ "GetStatus", NULL, "i", dbus_get_power_status},
 };
 
 static void power_init(void *data)
@@ -639,10 +731,17 @@ static void power_init(void *data)
 	int bTelReady = 0;
 	int ret;
 
+	/*get power configuration file */
+	config_parse(POWER_CONF_PATH, power_load_config, &power_conf);
 	/* init dbus interface */
 	ret = register_edbus_method(DEVICED_PATH_POWER, edbus_methods, ARRAY_SIZE(edbus_methods));
 	if (ret < 0)
 		_E("fail to init edbus method(%d)", ret);
+	ret = register_edbus_method(DEVICED_PATH_POWEROFF, poweroff_edbus_methods, ARRAY_SIZE(poweroff_edbus_methods));
+	if (ret < 0)
+		_E("fail to init edbus method(%d)", ret);
+	if (vconf_notify_key_changed(VCONFKEY_SYSMAN_POWER_OFF_STATUS, (void *)poweroff_control_cb, NULL) < 0)
+		_E("Vconf notify key chaneged failed: KEY(%s)", VCONFKEY_SYSMAN_POWER_OFF_STATUS);
 
 	register_edbus_signal_handler(DEVICED_OBJECT_PATH, DEVICED_INTERFACE_NAME,
 			SIGNAL_NAME_POWEROFF_POPUP,
@@ -651,13 +750,16 @@ static void power_init(void *data)
 		    DEVICED_INTERFACE_CORE,
 		    SIGNAL_BOOTING_DONE,
 		    booting_done_edbus_signal_handler);
+	register_edbus_signal_handler(DEVICED_PATH_CORE,
+		    DEVICED_INTERFACE_CORE,
+		    SIGNAL_EARLY_BOOTING_DONE,
+		    early_booting_done_edbus_signal_handler);
 	register_notifier(DEVICE_NOTIFIER_BOOTING_DONE, booting_done);
 
 	hall_ic = find_device(HALL_IC_NAME);
 }
 
 static const struct device_ops power_device_ops = {
-	.priority = DEVICE_PRIORITY_NORMAL,
 	.name     = POWER_OPS_NAME,
 	.init     = power_init,
 	.execute  = power_execute,

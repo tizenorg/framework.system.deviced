@@ -1,7 +1,7 @@
 /*
  * deviced
  *
- * Copyright (c) 2012 - 2013 Samsung Electronics Co., Ltd.
+ * Copyright (c) 2012 - 2015 Samsung Electronics Co., Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the License);
  * you may not use this file except in compliance with the License.
@@ -22,47 +22,25 @@
 
 #include <stdbool.h>
 
-#define SMACKFS_MOUNT_OPT	"smackfsroot=system::ext_storage,smackfsdef=system::ext_storage"
 #define MMC_MOUNT_POINT		"/opt/storage/sdcard"
-
-#define BUF_LEN		20
-#define RETRY_COUNT	10
 
 #define MMC_POPUP_NAME		"mmc-syspopup"
 #define MMC_POPUP_APP_KEY	"_APP_NAME_"
 #define MMC_POPUP_SMACK_VALUE	"checksmack"
 
-enum mmc_fs_type {
-	FS_TYPE_VFAT = 0,
-	FS_TYPE_EXFAT,
-	FS_TYPE_EXT4,
+enum mmc_dev_type{
+	MMC_DEV_REMOVED = 0,
+	MMC_DEV_INSERTED = 1,
 };
 
-struct mmc_fs_ops {
-	enum mmc_fs_type type;
-	const char *name;
-	bool (*match) (const char *);
-	int (*check) (const char *);
-	int (*mount) (bool, const char *, const char *);
-	int (*format) (const char *);
+enum mmc_operation_type{
+	MMC_NOT_INITIALIZED = -1,
+	MMC_OPERATION_COMPLETED = 0,
+	MMC_OPERATION_FAILED = 1,
 };
 
-struct fs_check {
-	int type;
-	char *name;
-	unsigned int offset;
-	unsigned int magic_sz;
-	char magic[4];
-};
-
-void add_fs(const struct mmc_fs_ops *fs);
-void remove_fs(const struct mmc_fs_ops *fs);
 int get_mmc_devpath(char devpath[]);
 bool mmc_check_mounted(const char *mount_point);
-
-int mmc_uevent_start(void);
-int mmc_uevent_stop(void);
-int get_block_number(void);
-
 void mmc_mount_done(void);
+
 #endif /* __MMC_HANDLER_H__ */

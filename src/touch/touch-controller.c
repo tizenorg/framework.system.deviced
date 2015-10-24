@@ -24,7 +24,7 @@ static struct touch_control *touch_control;
 /******************************************************
  *                Touch VCONF interface               *
  ******************************************************/
-static void touch_vconf_pm_sip_status(keynode_t *key, void* data)
+static void touch_vconf_pm_sip_status(keynode_t *key, void *data)
 {
 	int sip_state;
 

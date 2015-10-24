@@ -19,13 +19,36 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 #include <limits.h>
 #include <unistd.h>
 #include <signal.h>
 #include <errno.h>
+#include <sys/resource.h>
+#include <sys/syscall.h>
 
 #include "log.h"
+
+static inline int ioprio_set(int which, int who, int ioprio)
+{
+	return syscall(__NR_ioprio_set, which, who, ioprio);
+}
+
+enum {
+	IOPRIO_CLASS_NONE,
+	IOPRIO_CLASS_RT,
+	IOPRIO_CLASS_BE,
+	IOPRIO_CLASS_IDLE,
+};
+
+enum {
+	IOPRIO_WHO_PROCESS = 1,
+	IOPRIO_WHO_PGRP,
+	IOPRIO_WHO_USER,
+};
+
+#define IOPRIO_CLASS_SHIFT	13
 
 static int parent(pid_t pid)
 {
@@ -42,7 +65,7 @@ static int parent(pid_t pid)
 		else if (WIFSTOPPED(status))
 			_I("%d stopped by signal %d", pid, WSTOPSIG(status));
 	} else
-		_I("%d waitpid() failed : %s", pid, strerror(errno));
+		_I("%d waitpid() failed : %d", pid, errno);
 
 	return -EAGAIN;
 }
@@ -63,7 +86,7 @@ int run_child(int argc, const char *argv[])
 {
 	pid_t pid;
 	struct sigaction act, oldact;
-	int r;
+	int r = 0;
 	FILE *fp;
 
 	if (!argv)
@@ -71,7 +94,7 @@ int run_child(int argc, const char *argv[])
 
 	fp = fopen(argv[0], "r");
 	if (fp == NULL) {
-		_E("fail %s (%s)", argv[0], strerror(errno));
+		_E("fail %s (%d)", argv[0], errno);
 		return -errno;
 	}
 	fclose(fp);
@@ -93,6 +116,50 @@ int run_child(int argc, const char *argv[])
 		child(argc, argv);
 	} else
 		r = parent(pid);
+
+	if (sigaction(SIGCHLD, &oldact, NULL) < 0)
+		_E("failed to restore sigaction");
+
+	return r;
+}
+
+int run_child_lowpri(int argc, const char *argv[])
+{
+	pid_t pid;
+	struct sigaction act, oldact;
+	int r = 0;
+	FILE *fp;
+
+	if (!argv)
+		return -EINVAL;
+
+	fp = fopen(argv[0], "r");
+	if (fp == NULL) {
+		_E("fail %s (%d)", argv[0], errno);
+		return -errno;
+	}
+	fclose(fp);
+
+	/* Use default signal handler */
+	act.sa_handler = SIG_DFL;
+	act.sa_sigaction = NULL;
+	act.sa_flags = 0;
+	sigemptyset(&act.sa_mask);
+
+	if (sigaction(SIGCHLD, &act, &oldact) < 0)
+		return -errno;
+
+	pid = fork();
+	if (pid < 0) {
+		_E("failed to fork");
+		r = -errno;
+	} else if (pid == 0) {
+		child(argc, argv);
+	} else {
+		setpriority(PRIO_PROCESS, pid, 10);
+		ioprio_set(IOPRIO_WHO_PROCESS, pid, IOPRIO_CLASS_IDLE << IOPRIO_CLASS_SHIFT);
+		r = parent(pid);
+	}
 
 	if (sigaction(SIGCHLD, &oldact, NULL) < 0)
 		_E("failed to restore sigaction");

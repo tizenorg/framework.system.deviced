@@ -37,6 +37,8 @@
 #define EINA_LIST_PROMOTE_LIST(a, b) \
 	a = eina_list_promote_list(a, b)
 
+typedef int dd_compare_cb(const void *, const void *);
+
 #ifdef EINA_LIST
 typedef Eina_List dd_list;
 #define DD_LIST_PREPEND(a, b)	\
@@ -45,18 +47,22 @@ typedef Eina_List dd_list;
 	a = eina_list_append(a, b)
 #define DD_LIST_REMOVE(a, b)	\
 	a = eina_list_remove(a, b)
+#define DD_LIST_REMOVE_LIST(a, b) \
+	a = eina_list_remove_list(a, b)
 #define DD_LIST_LENGTH(a)		\
 	eina_list_count(a)
 #define DD_LIST_NTH(a, b)			\
 	eina_list_nth(a, b)
 #define DD_LIST_FREE_LIST(a)    \
 	a = eina_list_free(a)
+#define DD_LIST_SORT(a, func)	\
+	a = eina_list_sort(a, eina_list_count(a), func)
 #define DD_LIST_FOREACH(head, elem, node)	\
 	EINA_LIST_FOREACH(head, elem, node)
 #define DD_LIST_FOREACH_SAFE(head, elem, elem_next, node) \
 	EINA_LIST_FOREACH_SAFE(head, elem, elem_next, node)
 #define DD_LIST_FIND(a, b)	\
-	a = eina_list_data_find_list(a, b)
+	eina_list_data_find_list(a, b)
 
 #else
 #include <glib.h>
@@ -98,12 +104,16 @@ out:
 	a = g_list_append(a, (gpointer)b)
 #define DD_LIST_REMOVE(a, b)		\
 	a = g_list_remove(a, (gpointer)b)
+#define DD_LIST_REMOVE_LIST(a, b) \
+	a = g_list_delete_link(a, b)
 #define DD_LIST_LENGTH(a)			\
 	g_list_length(a)
 #define DD_LIST_NTH(a, b)			\
 	g_list_nth_data(a, b)
 #define DD_LIST_FREE_LIST(a)        \
 	g_list_free(a)
+#define DD_LIST_SORT(a, func)       \
+	a = g_list_sort(a, func)
 #define DD_LIST_FOREACH(head, elem, node)	\
 	for (elem = head, node = NULL; elem && ((node = elem->data) != NULL); elem = elem->next, node = NULL)
 #define DD_LIST_FOREACH_SAFE(head, elem, elem_next, node) \
@@ -111,7 +121,7 @@ out:
 			elem && ((node = elem->data) != NULL); \
 			elem = elem_next, elem_next = g_list_next(elem), node = NULL)
 #define DD_LIST_FIND(a, b)		\
-	a = g_list_find(a, (gpointer)b)
+	g_list_find(a, (gpointer)b)
 
 #endif
 

@@ -1,0 +1,13 @@
+[Unit]
+Description=System device daemon
+ConditionVirtualization=!container
+
+[Service]
+BusName=org.tizen.system.deviced
+ExecStart=/usr/bin/deviced
+Restart=always
+RestartSec=0
+KillSignal=SIGUSR1
+
+[Install]
+WantedBy=multi-user.target

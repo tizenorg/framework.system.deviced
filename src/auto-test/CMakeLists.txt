@@ -3,8 +3,12 @@ PROJECT(deviced-auto-test C)
 
 INCLUDE_DIRECTORIES(${CMAKE_CURRENT_SOURCE_DIR}/src)
 
-IF("$ENV{CFLAGS}" MATCHES "-DMICRO_DD")
-	OPTION(USE_MICRO_DD "Use Micro DD" ON)
+IF("${PROFILE}" STREQUAL "wearable")
+	SET(PROFILE wearable)
+ELSEIF("${PROFILE}" STREQUAL "tv")
+	SET(PROFILE tv)
+ELSE()
+	SET(PROFILE mobile)
 ENDIF()
 
 IF("$ENV{CFLAGS}" MATCHES "-DTIZEN_ENGINEER_MODE")
@@ -15,13 +19,12 @@ SET(SRCS
 	test.c
 	main.c
 	udev.c
-	archive.c
 	boot.c
 	cpu-info.c
-	board-info.c
 	time.c
 	result.c
 	cool-down.c
+	haptic.c
 )
 
 # extcon test
@@ -30,19 +33,19 @@ SET(SRCS ${SRCS}
 	storage.c
 	usb.c
 	hdmi.c
+	earjack.c
 )
 
-IF(NOT USE_MICRO_DD)
+IF(NOT PROFILE STREQUAL wearable)
 SET(SRCS ${SRCS}
 	cradle.c
-	earjack.c
 	keyboard.c
 	tvout.c
 )
-ENDIF(NOT USE_MICRO_DD)
+ENDIF(NOT PROFILE STREQUAL wearable)
 
 INCLUDE(FindPkgConfig)
-pkg_check_modules(pkgs REQUIRED edbus libarchive)
+pkg_check_modules(pkgs REQUIRED edbus)
 
 FOREACH(flag ${pkgs_CFLAGS})
 	SET(EXTRA_CFLAGS "${EXTRA_CFLAGS} ${flag}")
@@ -50,18 +53,19 @@ ENDFOREACH(flag)
 
 SET(EXTRA_CFLAGS "${EXTRA_CFLAGS} -g -fno-omit-frame-pointer")
 SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${EXTRA_CFLAGS} -fPIE")
-SET(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -pie")
-
-IF("$ENV{CFLAGS}" MATCHES "-DMICRO_DD")
-	OPTION(USE_MICRO_DD "Use Micro DD" ON)
-ENDIF()
+SET(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--as-needed -pie")
 
 ADD_DEFINITIONS("-DPREFIX=\"${CMAKE_INSTALL_PREFIX}\"")
 ADD_DEFINITIONS("-DENABLE_TEST_DLOG")
 
 ADD_EXECUTABLE(${PROJECT_NAME} ${SRCS})
-TARGET_LINK_LIBRARIES(${PROJECT_NAME} ${pkgs_LDFLAGS} "-larchive" shared)
+TARGET_LINK_LIBRARIES(${PROJECT_NAME} ${pkgs_LDFLAGS} shared)
 
 INSTALL(TARGETS ${PROJECT_NAME} DESTINATION bin)
 
-ADD_SUBDIRECTORY(activation)
+INSTALL(FILES
+		${CMAKE_CURRENT_SOURCE_DIR}/systemd/org.tizen.system.deviced-auto-test.service
+		DESTINATION share/dbus-1/system-services)
+INSTALL(FILES
+		${CMAKE_CURRENT_SOURCE_DIR}/systemd/deviced-auto-test.service
+		DESTINATION lib/systemd/system)

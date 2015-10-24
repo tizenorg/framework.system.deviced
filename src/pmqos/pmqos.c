@@ -35,22 +35,95 @@
 #define DEFAULT_PMQOS_TIMER		3000
 
 #define PMQOS_CONF_PATH		"/etc/deviced/pmqos.conf"
+#define MILLISECONDS(tv)	((tv.tv_sec)*1000 + (tv.tv_nsec)/1000000)
+#define DELTA(a, b)		(MILLISECONDS(a) - MILLISECONDS(b))
+
+static Eina_Bool pmqos_cpu_timer(void *data);
 
 struct pmqos_cpu {
 	char name[NAME_MAX];
-	Ecore_Timer *timer;
+	int timeout;
 };
 
 static dd_list *pmqos_head;
+static Ecore_Timer *unlock_timer;
+static struct timespec unlock_timer_start_st;
+static struct timespec unlock_timer_end_st;
+static struct pmqos_cpu unlock_timer_owner = {"NULL", 0};
 
 int set_cpu_pmqos(const char *name, int val)
 {
 	char scenario[100];
 
+	if (val)
+		_D("Set pm scenario : [Lock  ]%s", name);
+	else
+		_D("Set pm scenario : [Unlock]%s", name);
 	snprintf(scenario, sizeof(scenario), "%s%s", name, (val ? "Lock" : "Unlock"));
-	_D("Set pm scenario : %s", scenario);
 	device_notify(DEVICE_NOTIFIER_PMQOS, (void *)scenario);
 	return device_set_property(DEVICE_TYPE_CPU, PROP_CPU_PM_SCENARIO, (int)scenario);
+}
+
+static void pmqos_unlock_timeout_update(void)
+{
+	dd_list *elem;
+	struct pmqos_cpu *cpu;
+	int delta = 0;
+
+	clock_gettime(CLOCK_REALTIME, &unlock_timer_end_st);
+	delta = DELTA(unlock_timer_end_st, unlock_timer_start_st);
+
+	if (delta <= 0)
+		return;
+
+	DD_LIST_FOREACH(pmqos_head, elem, cpu) {
+		cpu->timeout -= delta;
+		if (cpu->timeout < 0)
+			cpu->timeout = 0;
+		if (cpu->timeout > 0)
+			continue;
+		/* Set cpu unlock */
+		set_cpu_pmqos(cpu->name, false);
+		/* Delete previous request */
+	}
+
+	DD_LIST_FOREACH(pmqos_head, elem, cpu) {
+		if (cpu->timeout > 0)
+			continue;
+		DD_LIST_REMOVE(pmqos_head, cpu);
+		free(cpu);
+		cpu = NULL;
+	}
+}
+
+static int pmqos_unlock_timer_start(void)
+{
+	int ret;
+	dd_list *elem;
+	struct pmqos_cpu *cpu;
+
+	if (unlock_timer) {
+		ecore_timer_del(unlock_timer);
+		unlock_timer = NULL;
+	}
+
+	ret = DD_LIST_LENGTH(pmqos_head);
+	if (ret == 0)
+		return 0;
+
+	DD_LIST_FOREACH(pmqos_head, elem, cpu) {
+		if (cpu->timeout <= 0)
+			continue;
+		memcpy(&unlock_timer_owner, cpu, sizeof(struct pmqos_cpu));
+		clock_gettime(CLOCK_REALTIME, &unlock_timer_start_st);
+		unlock_timer = ecore_timer_add(((unlock_timer_owner.timeout)/1000.f),
+			pmqos_cpu_timer, NULL);
+		if (unlock_timer)
+			break;
+		_E("fail init pmqos unlock %s %d", cpu->name, cpu->timeout);
+		return -EPERM;
+	}
+	return 0;
 }
 
 static int pmqos_cpu_cancel(const char *name)
@@ -63,82 +136,91 @@ static int pmqos_cpu_cancel(const char *name)
 		if (!strcmp(cpu->name, name))
 			break;
 	}
-
-	/* In case of already end up request */
-	if(!cpu) {
-		_I("%s request is already canceled", name);
+	/* no cpu */
+	if (!cpu)
 		return 0;
-	}
 
-	/* Set cpu unlock */
+	/* unlock cpu */
 	set_cpu_pmqos(cpu->name, false);
-
-	/* Delete previous request */
+	/* delete cpu */
 	DD_LIST_REMOVE(pmqos_head, cpu);
-	ecore_timer_del(cpu->timer);
 	free(cpu);
 
+	if (strncmp(unlock_timer_owner.name, name, strlen(name)))
+		goto out;
+	/* undata cpu */
+	pmqos_unlock_timeout_update();
+	pmqos_unlock_timer_start();
+out:
 	return 0;
 }
 
 static Eina_Bool pmqos_cpu_timer(void *data)
 {
-	char *name = (char*)data;
 	int ret;
 
-	_I("%s request will be unlocked", name);
-	ret = pmqos_cpu_cancel(name);
+	ret = pmqos_cpu_cancel(unlock_timer_owner.name);
 	if (ret < 0)
-		_E("Can not find %s request", name);
+		_E("Can not find %s request", unlock_timer_owner.name);
 
-	free(name);
 	return ECORE_CALLBACK_CANCEL;
+}
+
+static int compare_timeout(const void *a, const void *b)
+{
+	const struct pmqos_cpu *pmqos_a = (const struct pmqos_cpu *)a;
+	const struct pmqos_cpu *pmqos_b = (const struct pmqos_cpu *)b;
+
+	if (!pmqos_a)
+		return 1;
+	if (!pmqos_b)
+		return -1;
+
+	if (pmqos_a->timeout < pmqos_b->timeout)
+		return -1;
+	else if (pmqos_a->timeout > pmqos_b->timeout)
+		return 1;
+	return 0;
 }
 
 static int pmqos_cpu_request(const char *name, int val)
 {
 	dd_list *elem;
 	struct pmqos_cpu *cpu;
-	Ecore_Timer *timer;
-	bool locked = false;
+	int found = 0;
+	int ret;
 
 	/* Check valid parameter */
 	if (val > DEFAULT_PMQOS_TIMER) {
 		_I("The timer value cannot be higher than default time value(%dms)", DEFAULT_PMQOS_TIMER);
 		val = DEFAULT_PMQOS_TIMER;
 	}
-
-	/* Find previous request */
+	/* find cpu */
 	DD_LIST_FOREACH(pmqos_head, elem, cpu) {
 		if (!strcmp(cpu->name, name)) {
-			ecore_timer_reset(cpu->timer);
-			locked = true;
+			cpu->timeout = val;
+			found = 1;
 			break;
 		}
 	}
-
-	/* In case of first request */
-	if (!cpu) {
-		/* Add new timer */
-		timer = ecore_timer_add(val/1000.f, pmqos_cpu_timer, (void*)strdup(name));
-		if (!timer)
-			return -EPERM;
-
+	/* add cpu */
+	if (!found) {
 		cpu = malloc(sizeof(struct pmqos_cpu));
-		if (!cpu) {
-			ecore_timer_del(timer);
+		if (!cpu)
 			return -ENOMEM;
-		}
+
 		snprintf(cpu->name, sizeof(cpu->name), "%s", name);
-		cpu->timer = timer;
+		cpu->timeout = val;
 		DD_LIST_APPEND(pmqos_head, cpu);
 	}
+	/* sort cpu */
+	DD_LIST_SORT(pmqos_head, compare_timeout);
 
+	ret = pmqos_unlock_timer_start();
+	if (ret < 0)
+		return ret;
 	/* Set cpu lock */
-	if(!locked) {
-		set_cpu_pmqos(cpu->name, true);
-	}
-
+	set_cpu_pmqos(cpu->name, true);
 	return 0;
 }
 
@@ -164,8 +246,10 @@ static int pmqos_poweroff(void *data)
 
 static int pmqos_ultrapowersaving(void *data)
 {
-	int mode = (int)data;
+	int mode;
 	bool on;
+
+	mode = *(int *)data;
 
 	switch (mode) {
 	case POWERSAVER_OFF:
@@ -184,6 +268,11 @@ static int pmqos_ultrapowersaving(void *data)
 static int pmqos_hall(void *data)
 {
 	return pmqos_cpu_request("LockScreen", (int)data);
+}
+
+static int pmqos_oom(void *data)
+{
+	return pmqos_cpu_request("OOMBOOST", (int)data);
 }
 
 static DBusMessage *dbus_pmqos_handler(E_DBus_Object *obj, DBusMessage *msg)
@@ -296,7 +385,7 @@ static int get_methods_from_conf(const char *path, struct edbus_method **edbus_m
 	/* allocate edbus methods structure */
 	methods = malloc(sizeof(struct edbus_method)*scenarios.num);
 	if (!methods) {
-		_E("failed to allocate methods memory : %s", strerror(errno));
+		_E("failed to allocate methods memory : %d", errno);
 		/* release scenarios memory */
 		release_pmqos_table(&scenarios);
 		return -errno;
@@ -363,12 +452,21 @@ static const struct edbus_method edbus_methods[] = {
 	{ "PowerOff",             "i",    "i", dbus_pmqos_handler },
 	{ "WebAppDrag",           "i",    "i", dbus_pmqos_handler },
 	{ "WebAppFlick",          "i",    "i", dbus_pmqos_handler },
-	{ "SensorWakeup",          "i",    "i", dbus_pmqos_handler },
+	{ "SensorWakeup",         "i",    "i", dbus_pmqos_handler },
+	{ "UgLaunch",             "i",    "i", dbus_pmqos_handler },
+	{ "MusicScroll",          "i",    "i", dbus_pmqos_handler },
+	{ "FileScroll",           "i",    "i", dbus_pmqos_handler },
+	{ "VideoScroll",          "i",    "i", dbus_pmqos_handler },
+	{ "EmailScroll",          "i",    "i", dbus_pmqos_handler },
+	{ "ContactScroll",        "i",    "i", dbus_pmqos_handler },
+	{ "TizenStoreScroll",     "i",    "i", dbus_pmqos_handler },
+	{ "CallLogScroll",        "i",    "i", dbus_pmqos_handler },
+	{ "MyfilesScroll",        "i",    "i", dbus_pmqos_handler },
 };
 
 static int booting_done(void *data)
 {
-	static int done = 0;
+	static int done;
 	struct edbus_method *methods = NULL;
 	int ret, size;
 
@@ -378,10 +476,13 @@ static int booting_done(void *data)
 	if (!done)
 		goto out;
 	_I("booting done");
+
 	/* register edbus methods */
-	ret = register_edbus_method(DEVICED_PATH_PMQOS, edbus_methods, ARRAY_SIZE(edbus_methods));
+	ret = register_edbus_interface_and_method(DEVICED_PATH_PMQOS,
+			DEVICED_INTERFACE_PMQOS,
+			edbus_methods, ARRAY_SIZE(edbus_methods));
 	if (ret < 0)
-		_E("fail to init edbus method(%d)", ret);
+		_E("fail to init edbus interface and method(%d)", ret);
 
 	/* get methods from config file */
 	size = get_methods_from_conf(PMQOS_CONF_PATH, &methods);
@@ -390,7 +491,9 @@ static int booting_done(void *data)
 
 	/* register edbus methods for pmqos */
 	if (methods) {
-		ret = register_edbus_method(DEVICED_PATH_PMQOS, methods, size);
+		ret = register_edbus_interface_and_method(DEVICED_PATH_PMQOS,
+				DEVICED_INTERFACE_PMQOS,
+				methods, size);
 		if (ret < 0)
 			_E("fail to init edbus method from conf(%d)", ret);
 		free(methods);
@@ -404,6 +507,7 @@ static int booting_done(void *data)
 	register_notifier(DEVICE_NOTIFIER_PMQOS_ULTRAPOWERSAVING,
 	    pmqos_ultrapowersaving);
 	register_notifier(DEVICE_NOTIFIER_PMQOS_HALL, pmqos_hall);
+	register_notifier(DEVICE_NOTIFIER_PMQOS_OOM, pmqos_oom);
 
 out:
 	return done;
@@ -424,10 +528,10 @@ static void pmqos_exit(void *data)
 	unregister_notifier(DEVICE_NOTIFIER_PMQOS_ULTRAPOWERSAVING,
 	    pmqos_ultrapowersaving);
 	unregister_notifier(DEVICE_NOTIFIER_PMQOS_HALL, pmqos_hall);
+	unregister_notifier(DEVICE_NOTIFIER_PMQOS_OOM, pmqos_oom);
 }
 
 static const struct device_ops pmqos_device_ops = {
-	.priority = DEVICE_PRIORITY_NORMAL,
 	.name     = "pmqos",
 	.init     = pmqos_init,
 	.exit     = pmqos_exit,

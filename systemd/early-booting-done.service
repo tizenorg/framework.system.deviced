@@ -1,0 +1,11 @@
+[Unit]
+Description=Early Booting Done
+After=boot-animation.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/dbus-send --type=signal --system /Org/Tizen/System/DeviceD/Core org.tizen.system.deviced.core.EarlyBootingDone
+SmackProcessLabel=deviced
+
+[Install]
+WantedBy=multi-user.target

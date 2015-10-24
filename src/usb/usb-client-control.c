@@ -23,12 +23,14 @@
 
 #define VCONFKEY_USB_CONTROL "db/private/usb/usb_control"
 
+#ifndef VCONFKEY_MDM_POLICY_TEXT
+#define VCONFKEY_MDM_POLICY_TEXT NULL
+#endif
+
 static int usb_control = DEVICE_OPS_STATUS_START;
 
 int control_start(enum device_flags flags)
 {
-	int state;
-
 	if (usb_control == DEVICE_OPS_STATUS_START)
 		return 0;
 
@@ -36,10 +38,7 @@ int control_start(enum device_flags flags)
 	if (vconf_set_int(VCONFKEY_USB_CONTROL, usb_control) != 0)
 		_E("Failed to set vconf");
 
-	state = get_current_usb_physical_state();
-	usb_state_changed(state);
-
-	if (state > 0)
+	if (get_current_usb_physical_state() > 0)
 		act_usb_connected();
 
 	return 0;
@@ -61,9 +60,11 @@ int control_stop(enum device_flags flags)
 		return 0;
 	}
 
+	update_usb_state(USB_STATE_DISCONNECTED);
+
 	unset_client_mode(cur_mode, false);
 
-	launch_syspopup(USB_RESTRICT);
+	launch_restrict_popup();
 
 	return 0;
 }
@@ -81,18 +82,10 @@ static void check_prev_control_status(void)
 
 static int usb_client_booting_done(void *data)
 {
-	int state;
-
 	unregister_notifier(DEVICE_NOTIFIER_BOOTING_DONE, usb_client_booting_done);
 	check_prev_control_status();
 
 	usbclient_init_booting_done();
-
-	state = get_current_usb_physical_state();
-	usb_state_changed(state);
-
-	if (state > 0)
-		act_usb_connected();
 
 	return 0;
 }
@@ -100,5 +93,10 @@ static int usb_client_booting_done(void *data)
 void wait_until_booting_done(void)
 {
 	register_notifier(DEVICE_NOTIFIER_BOOTING_DONE, usb_client_booting_done);
-	usb_control = DEVICE_OPS_STATUS_STOP;
+}
+
+void launch_restrict_popup(void)
+{
+	if (vconf_set_str(VCONFKEY_MDM_POLICY_TEXT, "MDM_POLICY_DISABLE_DESKTOP_SYNC") != 0)
+		_E("Failed to launch restrict popup");
 }

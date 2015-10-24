@@ -24,10 +24,12 @@
 #include "util.h"
 #include "core.h"
 #include "display-ops.h"
+#include "weaks.h"
 #include "core/common.h"
 #include "core/device-notifier.h"
 #include "core/edbus-handler.h"
 #include "core/config-parser.h"
+#include "core/device-nodes.h"
 
 #define BOARD_CONF_FILE "/etc/deviced/display.conf"
 
@@ -50,7 +52,7 @@ struct hbm_config hbm_conf = {
 	.off_count	= OFF_COUNT,
 };
 
-static Ecore_Timer *timer = NULL;
+static Ecore_Timer *timer;
 static struct timespec offtime;
 static char *hbm_path;
 
@@ -148,6 +150,18 @@ int hbm_set_state(int hbm)
 	return sys_set_str(hbm_path, (hbm ? ON : OFF));
 }
 
+void hbm_turn_on(void)
+{
+	if (!hbm_get_state())
+		hbm_set_state(true);
+}
+
+void hbm_turn_off(void)
+{
+	if (hbm_get_state())
+		hbm_set_state(false);
+}
+
 int hbm_set_state_with_timeout(int hbm, int timeout)
 {
 	int ret;
@@ -228,14 +242,13 @@ static int lcd_state_changed(void *data)
 			hbm_check_timeout();
 		break;
 	case S_LCDDIM:
+	case S_LCDOFF:
+	case S_SLEEP:
 		if (hbm_get_state() == true) {
 			ret = hbm_set_state(false);
 			if (ret < 0)
 				_E("Failed to off hbm!");
 		}
-		/* fall through */
-	case S_LCDOFF:
-	case S_SLEEP:
 		hbm_end_timer();
 		break;
 	}
@@ -276,11 +289,12 @@ static void hbm_init(void *data)
 {
 	int fd, ret;
 
-	hbm_path = getenv("HBM_NODE");
+	hbm_path = find_device_node(DEVICE_HBM);
 
 	/* Check HBM node is valid */
 	fd = open(hbm_path, O_RDONLY);
 	if (fd < 0) {
+		_E("Failed to open hbm node %s", hbm_path);
 		hbm_path = NULL;
 		return;
 	}

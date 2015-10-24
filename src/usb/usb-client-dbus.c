@@ -27,6 +27,7 @@
 #define METHOD_GET_MODE       "GetMode"
 #define SIGNAL_STATE_CHANGED  "StateChanged"
 #define SIGNAL_MODE_CHANGED   "ModeChanged"
+#define SIGNAL_CONFIG_ENABLED "ConfigEnabled"
 
 #define USB_STATE_MAX   UINT_MAX
 #define USB_MODE_MAX    UINT_MAX
@@ -54,7 +55,7 @@ static void change_usb_client_mode(void *data, DBusMessage *msg)
 		goto out;
 	}
 
-	switch (mode){
+	switch (mode) {
 	case SET_USB_DEFAULT:
 	case SET_USB_RNDIS:
 	case SET_USB_RNDIS_DIAG:
@@ -164,6 +165,24 @@ void send_msg_usb_mode_changed(void)
 		_E("Failed to send dbus signal");
 }
 
+void send_msg_usb_config_enabled(int state)
+{
+	int ret;
+	char *param[1];
+	char buf[2];
+
+	snprintf(buf, sizeof(buf), "%d", state);
+	param[0] = buf;
+
+	_I("USB config enabled (%d)", state);
+
+	ret = broadcast_edbus_signal(DEVICED_PATH_USB,
+	    DEVICED_INTERFACE_USB, SIGNAL_CONFIG_ENABLED, "i", param);
+
+	if (ret < 0)
+		_E("Failed to send dbus signal");
+}
+
 static DBusMessage *get_usb_client_state(E_DBus_Object *obj, DBusMessage *msg)
 {
 	DBusMessageIter iter;
@@ -199,5 +218,7 @@ static const struct edbus_method edbus_methods[] = {
 
 int register_usbclient_dbus_methods(void)
 {
-	return register_edbus_method(DEVICED_PATH_USB, edbus_methods, ARRAY_SIZE(edbus_methods));
+	return register_edbus_interface_and_method(DEVICED_PATH_USB,
+			DEVICED_INTERFACE_USB,
+			edbus_methods, ARRAY_SIZE(edbus_methods));
 }

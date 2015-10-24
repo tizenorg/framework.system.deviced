@@ -37,6 +37,7 @@
 API int deviced_get_pid(const char *execpath)
 {
 	DIR *dp;
+	struct dirent entry;
 	struct dirent *dentry;
 	int pid = -1, fd;
 	char buf[BUFF_MAX];
@@ -49,7 +50,11 @@ API int deviced_get_pid(const char *execpath)
 		return -1;
 	}
 
-	while ((dentry = readdir(dp)) != NULL) {
+	while (1) {
+		ret = readdir_r(dp, &entry, &dentry);
+		if (ret != 0 || dentry == NULL)
+			break;
+
 		if (!isdigit(dentry->d_name[0]))
 			continue;
 
@@ -63,7 +68,7 @@ API int deviced_get_pid(const char *execpath)
 		ret = read(fd, buf2, BUFF_MAX);
 		close(fd);
 
-		if (ret < 0 || ret >=BUFF_MAX)
+		if (ret < 0 || ret >= BUFF_MAX)
 			continue;
 
 		buf2[ret] = '\0';
@@ -123,8 +128,10 @@ API int deviced_get_apppath(pid_t pid, char *app_path, size_t app_path_size)
 	int ret;
 
 	snprintf(buf, PATH_MAX, "/proc/%d/exe", pid);
-	if (app_path == NULL
-	    || (ret = readlink(buf, app_path, app_path_size)) == -1)
+	if (app_path == NULL)
+		return -1;
+	ret = readlink(buf, app_path, app_path_size);
+	if (ret == -1)
 		return -1;
 	if (app_path_size == ret) {
 		app_path[ret - 1] = '\0';

@@ -24,6 +24,8 @@
 extern "C" {
 #endif
 
+#include "dd-common.h"
+
 /**
  * @file        dd-storage.h
  * @defgroup    CAPI_SYSTEM_DEVICED_STORAGE_MODULE Storage
@@ -65,7 +67,7 @@ enum storage_path_type {
  *  ...
  * @endcode
  */
-int storage_get_path(int type, unsigned char *path, int size);
+int storage_get_path(int type, unsigned char *path, int size) DEPRECATED;
 
 /**
  * @} // end of CAPI_SYSTEM_DEVICED_STORAGE_MODULE

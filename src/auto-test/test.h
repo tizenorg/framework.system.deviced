@@ -36,7 +36,7 @@
 #define LOG_TAG "AUTO_TEST"
 #include "shared/log-macro.h"
 
-#define TEST_WAIT_TIME_INTERVAL	5
+#define TEST_WAIT_TIME_INTERVAL	2
 #define METHOD_SET_DEVICE	"device_changed"
 
 enum test_priority {

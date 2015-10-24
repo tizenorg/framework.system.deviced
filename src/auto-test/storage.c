@@ -71,10 +71,10 @@ static int storage(void)
 
 	dbus_error_init(&err);
 
-	ret = dbus_message_get_args(msg, &err, DBUS_TYPE_INT64, &dTotal, DBUS_TYPE_INT64, &dAvail, DBUS_TYPE_INVALID);;
-	if (!ret) {
+	ret = dbus_message_get_args(msg, &err, DBUS_TYPE_INT64, &dTotal, DBUS_TYPE_INT64, &dAvail, DBUS_TYPE_INVALID);
+	if (!ret)
 		_E("no message : [%s:%s]", err.name, err.message);
-	}
+
 	_I("total : %4.4lf avail %4.4lf", dTotal, dAvail);
 	if (ret < 0)
 		_R("[NG] ---- %s", __func__);
@@ -83,7 +83,46 @@ static int storage(void)
 		__func__, dTotal, dAvail);
 	dbus_message_unref(msg);
 	dbus_error_free(&err);
-	sleep(TEST_WAIT_TIME_INTERVAL);
+	return ret;
+}
+
+static int storage_get_status(char *path)
+{
+	DBusError err;
+	DBusMessage *msg;
+	int ret;
+	char *param[1];
+	char str_path[256];
+	double dAvail;
+	double dTotal;
+
+	snprintf(str_path, sizeof(str_path), "%s", path);
+	param[0] = str_path;
+	msg = dbus_method_sync_with_reply(DEVICED_BUS_NAME,
+			DEVICED_PATH_STORAGE,
+			DEVICED_INTERFACE_STORAGE,
+			"GetStatus", "s", param);
+	if (!msg) {
+		_E("fail : %s %s %s %s",
+			DEVICED_BUS_NAME, DEVICED_PATH_SYSNOTI, DEVICED_INTERFACE_SYSNOTI,
+			METHOD_GET_STORAGE);
+		return -EBADMSG;
+	}
+
+	dbus_error_init(&err);
+
+	ret = dbus_message_get_args(msg, &err, DBUS_TYPE_INT64, &dTotal, DBUS_TYPE_INT64, &dAvail, DBUS_TYPE_INVALID);
+	if (!ret)
+		_E("no message : [%s:%s]", err.name, err.message);
+
+	_I("total : %4.4lf avail %4.4lf", dTotal, dAvail);
+	if (ret < 0)
+		_R("[NG] ---- %s", __func__);
+	else
+		_R("[OK] ---- %s          : T(%4.4lf) A(%4.4lf)",
+		__func__, dTotal, dAvail);
+	dbus_message_unref(msg);
+	dbus_error_free(&err);
 	return ret;
 }
 
@@ -100,11 +139,19 @@ static void storage_exit(void *data)
 
 static int storage_unit(int argc, char **argv)
 {
+	int i;
+
+	for (i = 0; i < argc; i++)
+		_D("argv[%d] = %s", i, argv[i]);
+
 	if (argv[1] == NULL)
 		return -EINVAL;
-	if (strcmp(argv[2], "value") == 0)
-		storage();
-	else if (strcmp(argv[2], "signal") == 0) {
+	if (strcmp(argv[2], "value") == 0) {
+		if (!argv[3])
+			storage();
+		else if (argv[3])
+			storage_get_status(argv[3]);
+	} else if (strcmp(argv[2], "signal") == 0) {
 		request_mem_trim();
 		ecore_main_loop_begin();
 	}

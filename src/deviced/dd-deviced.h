@@ -108,19 +108,6 @@ int deviced_get_apppath(pid_t pid, char *app_path, size_t app_path_size);
 /* sysconf */
 
 /**
- * @fn int deviced_conf_set_mempolicy(enum mem_policy mempol)
- * @brief This API is used to set the policy of the current process when the phone has low available memory.
- * @param[in] mempol oom adjust value which you want to set
- * @return 0 on success, -1 if failed.
- * @see deviced_conf_set_mempolicy_bypid()
- * @retval -1 operation error
- * @retval -EBADMSG - dbus error (in case of any error on the bus)
- * @retval -EINVAL no mandatory parameters
- * @retval -ESRCH incorrect sender process id
- */
-int deviced_conf_set_mempolicy(enum mem_policy mempol);
-
-/**
  * @fn int deviced_conf_set_mempolicy_bypid(pid_t pid, enum mem_policy mempol)
  * @brief This API is used to set the policy of the given process when the phone has low available memory.
  * @param[in] pid process id which you want to set
@@ -132,89 +119,6 @@ int deviced_conf_set_mempolicy(enum mem_policy mempol);
  * @retval -ESRCH incorrect sender process id
  */
 int deviced_conf_set_mempolicy_bypid(pid_t pid, enum mem_policy mempol);
-
-/**
- * @fn int deviced_conf_set_permanent(void)
- * @brief This API is used to set itself as a permanent process.\n
- * 		If the permanent process is dead, system server will relaunch the process automatically.
- * @return 0 on success, -1 if failed.
- * @see deviced_conf_set_permanent_bypid()
- * @par Example
- * @code
- *  ...
- *  ret = deviced_conf_set_permanent();
- *  if( ret < 0 )
- *      printf("Fail to set a process as permanent\n");
- *  ...
- * @endcode
- */
-int deviced_conf_set_permanent(void);
-
-/**
- * @fn int deviced_conf_set_permanent_bypid(pid_t pid)
- * @brief This API is used to set a given process as permanent.\n
- *       If the permanent process is dead, system server will relaunch the process automatically.
- * @param[in] pid proces id
- * @return 0 on success, -1 if failed.
- * @see deviced_set_permanent()
- * @par Example
- * @code
- *  ...
- *  ret = deviced_conf_set_permanent_bypid(pid);
- *  if( ret < 0 )
- *      printf("Fail to set a process(%d) as permanent\n",pid);
- *  ...
- * @endcode
- */
-int deviced_conf_set_permanent_bypid(pid_t pid);
-
-/**
- * @fn int deviced_conf_set_vip(pid_t pid)
- * @brief This API is used to set a process which has pid as Very Important Process(VIP) .\n
- * 		If the VIP process is dead, restarter program will be run. \n
- * 		Restarter program may kill almost processes and run rc.local scripts again.
- * @param[in] pid process id to be vip
- * @return 0 on success, -1 if failed.
- * @see sysconf_is_vip
- * @par Example
- * @code
- * 	...
- * 	ret = deviced_conf_set_vip(pid);
- * 	if( ret < 0 )
- * 		printf("Fail to set a process(%d) as VIP\n",pid);
- * 	...
- * @endcode
- */
-int deviced_conf_set_vip(pid_t pid);
-
-/**
- * @fn int deviced_conf_is_vip(pid_t pid)
- * @brief This API is used to verify that process which has pid is Very Important Process(VIP) or not.
- * @param[in] pid process id to be vip
- * @return 1 if given process if vip process, otherwise 0 is returned.
- * @see deviced_conf_set_vip
- * @par Example
- * @code
- * 	...
- * 	ret = deviced_conf_is_vip(pid);
- * 	if(ret)
- * 		printf("process(%d) is Very Important Process\n",pid);
- * 	...
- * @endcode
- */
-int deviced_conf_is_vip(pid_t pid);
-
-/**
- * @fn int deviced_set_timezone(char *tzpath_str)
- * @brief This API sets system timezone.
- * @param[in] tzpath_str path to timezone definition file
- * @return 0 on success, negative value if failed.
- * @retval -1 operation error
- * @retval -EBADMSG dbus error (in case of any error on the bus)
- * @retval -EINVAL no mandatory parameters
- * @retval -ESRCH incorrect sender process id
- */
-int deviced_set_timezone(char *tzpath_str);
 
 /**
  * @fn int deviced_call_predef_action(const char *type, int num, ...)

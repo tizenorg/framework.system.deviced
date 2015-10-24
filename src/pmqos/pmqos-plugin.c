@@ -39,7 +39,7 @@ static bool is_supported(const char *value)
 
 static int pmqos_parse_scenario(struct parse_result *result, void *user_data, unsigned int index)
 {
-	struct pmqos_scenario *scenarios = (struct pmqos_scenario*)user_data;
+	struct pmqos_scenario *scenarios = (struct pmqos_scenario *)user_data;
 
 	assert(result);
 	assert(result->section && result->name && result->value);
@@ -74,8 +74,8 @@ static int pmqos_parse_scenario(struct parse_result *result, void *user_data, un
 
 	/* Parse 'Scenario' section */
 	if (MATCH(result->name, "name"))
-		strncpy(scenarios->list[index].name, result->value,
-				strlen(scenarios->list[index].name));
+		snprintf(scenarios->list[index].name,
+				sizeof(scenarios->list[index].name), "%s", result->value);
 	else if (MATCH(result->name, "support"))
 		scenarios->list[index].support = is_supported(result->value);
 
@@ -84,7 +84,7 @@ static int pmqos_parse_scenario(struct parse_result *result, void *user_data, un
 
 static int pmqos_load_config(struct parse_result *result, void *user_data)
 {
-	struct pmqos_scenario *scenarios = (struct pmqos_scenario*)user_data;
+	struct pmqos_scenario *scenarios = (struct pmqos_scenario *)user_data;
 	char name[NAME_MAX];
 	int ret;
 	static int index;

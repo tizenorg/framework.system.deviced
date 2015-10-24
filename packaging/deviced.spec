@@ -1,49 +1,96 @@
+
+# display, extcon, stroage, power, usb are always enable
+%define battery_module on
+%define block_module on
+# What use is bluetooth module ?
+%define bluetooth_module off
+# Is it profile feature ?
+%define display_module on
+%define extcon_module on
+%define haptic_module on
+%define hdmi_cec_module on
+%define led_module on
+# Will be used before long
+%define pass_module off
+%define pmqos_module on
+%define power_module on
+%define powersaver_module off
+%define storage_module on
+%define telephony_module on
+%define touch_module on
+%define tzip_module on
+%define usb_module on
+%define usbhost_module on
+#Just For debugging
+%define sdb_prestart on
+
+%if "%{?tizen_profile_name}" == "mobile"
+%define bluetooth_module on
+%define sdb_prestart on
+%endif
+%if "%{?tizen_profile_name}" == "wearable"
+%define block_module off
+%define hdmi_cec_module off
+%define led_module off
+%define usbhost_module off
+%define sdb_prestart off
+%endif
+%if "%{?tizen_profile_name}" == "tv"
+%define battery_module off
+%define haptic_module off
+%define hdmi_cec_module off
+%define led_module off
+%define pmqos_module off
+%define telephony_module off
+%define touch_module off
+%define tzip_module off
+%define usb_module off
+%define sdb_prestart off
+%endif
+
 Name:       deviced
-Summary:    deviced
-Version:    1.0.0
+Summary:    Deviced
+Version:    1.0.1
 Release:    1
 Group:      Framework/system
-License:    Apache-2.0 and BSD-2-Clause and BSD-1.0
+License:    Apache-2.0 and BSD 2-clause and BSD-1.0
 Source0:    %{name}-%{version}.tar.gz
-Source1:    %{name}.service
-Source2:    zbooting-done.service
-Source3:    shutdown-notify.service
-Source4:    deviced-pre.service
-Source5:    devicectl-start@.service
-Source6:    devicectl-stop@.service
-Source7:    sdb-prestart.service
-Source1001: deviced.manifest
-Source1002: libdeviced.manifest
+Source1:    deviced.manifest
+Source2:    libdeviced.manifest
+Source3:    deviced-tools.manifest
 
 BuildRequires:  cmake
 BuildRequires:  libattr-devel
 BuildRequires:  gettext-devel
 BuildRequires:  pkgconfig(ecore)
+BuildRequires:  pkgconfig(eina)
 BuildRequires:  pkgconfig(vconf)
 BuildRequires:  pkgconfig(dlog)
 BuildRequires:  pkgconfig(device-node)
 BuildRequires:  pkgconfig(edbus)
 BuildRequires:  pkgconfig(capi-base-common)
-BuildRequires:  systemd-devel
-BuildRequires:	pkgconfig(systemd)
-BuildRequires:	pkgconfig(sqlite3)
-BuildRequires:	pkgconfig(libbuxton)
+BuildRequires:  pkgconfig(libudev)
+BuildRequires:  pkgconfig(gio-2.0)
+BuildRequires:	pkgconfig(eventsystem)
+%if %{?display_module} == on
+BuildRequires:	pkgconfig(libinput)
+BuildRequires:	pkgconfig(capi-system-sensor)
+%endif
+%if %{?storage_module} == on
 BuildRequires:	pkgconfig(storage)
-BuildRequires:	pkgconfig(dbus-glib-1)
-BuildRequires:	pkgconfig(journal)
-BuildRequires:	pkgconfig(libarchive)
-BuildRequires:	pkgconfig(sensor)
+%endif
+%if %{?telephony_module} == on
 BuildRequires:	pkgconfig(tapi)
+%endif
+%if %{?tzip_module} == on
+BuildRequires:	pkgconfig(fuse)
+BuildRequires:	pkgconfig(minizip)
+%endif
 
-Requires(preun): /usr/bin/systemctl
-Requires(post): sys-assert
-Requires(post): /usr/bin/systemctl
+Requires: %{name}-tools = %{version}-%{release}
+%{?systemd_requires}
 Requires(post): /usr/bin/vconftool
 Requires(post): pulseaudio
-Requires(post): buxton
-Requires(post): pkgconfig(journal)
-Requires(post): pkgconfig(libarchive)
-Requires(postun): /usr/bin/systemctl
 
 %description
 deviced
@@ -51,14 +98,21 @@ deviced
 %package deviced
 Summary:    deviced daemon
 Group:      main
-Requires:   %{name} = %{version}-%{release}
 
 %description deviced
 deviced daemon.
 
+%package tools
+Summary:  Deviced tools
+Group:    System/Utilities
+
+%description tools
+Deviced helper programs
+
 %package -n libdeviced
 Summary:    Deviced library
 Group:      Development/Libraries
+Requires:   %{name} = %{version}-%{release}
 
 %description -n libdeviced
 Deviced library for device control
@@ -73,54 +127,72 @@ Deviced library for device control (devel)
 
 %prep
 %setup -q
-%if "%{?tizen_profile_name}" == "wearable"
-export CFLAGS+=" -DMICRO_DD"
-%endif
 
 export CFLAGS+=" -DTIZEN_DEBUG_ENABLE"
 export CFLAGS+=" -DTIZEN_ENGINEER_MODE"
 %define ENGINEER_MODE 1
-%define SDB_PRESTART 1
 
 %ifarch %{arm}
 %define ARCH arm
 %else
 %define ARCH emulator
 %endif
-cmake . -DCMAKE_INSTALL_PREFIX=%{_prefix} -DARCH=%{ARCH}
+cmake . \
+	-DCMAKE_INSTALL_PREFIX=%{_prefix} \
+	-DARCH=%{ARCH} \
+	-DPROFILE=%{tizen_profile_name} \
+	-DBATTERY_MODULE=%{battery_module} \
+	-DBLOCK_MODULE=%{block_module} \
+	-DBLUETOOTH_MODULE=%{bluetooth_module} \
+	-DDISPLAY_MODULE=%{display_module} \
+	-DEXTCON_MODULE=%{extcon_module} \
+	-DHAPTIC_MODULE=%{haptic_module} \
+	-DHDMI_CEC_MODULE=%{hdmi_cec_module} \
+	-DLED_MODULE=%{led_module} \
+	-DPASS_MODULE=%{pass_module} \
+	-DPMQOS_MODULE=%{pmqos_module} \
+	-DPOWER_MODULE=%{power_module} \
+	-DPOWERSAVER_MODULE=%{powersaver_module} \
+	-DSTORAGE_MODULE=%{storage_module} \
+	-DTELEPHONY_MODULE=%{telephony_module} \
+	-DTOUCH_MODULE=%{touch_module} \
+	-DTZIP_MODULE=%{tzip_module} \
+	-DUSB_MODULE=%{usb_module} \
+	-DUSBHOST_MODULE=%{usbhost_module}
 
 %build
-cp %{SOURCE1001} .
-cp %{SOURCE1002} .
-
+cp %{SOURCE1} .
+cp %{SOURCE2} .
+cp %{SOURCE3} .
 make
 
 %install
 rm -rf %{buildroot}
 %make_install
 
-mkdir -p %{buildroot}%{_libdir}/systemd/system/multi-user.target.wants
-mkdir -p %{buildroot}%{_libdir}/systemd/system/graphical.target.wants
-mkdir -p %{buildroot}%{_libdir}/systemd/system/shutdown.target.wants
-install -m 0644 %{SOURCE1} %{buildroot}%{_libdir}/systemd/system/deviced.service
-install -m 0644 %{SOURCE2} %{buildroot}%{_libdir}/systemd/system/zbooting-done.service
-install -m 0644 %{SOURCE3} %{buildroot}%{_libdir}/systemd/system/shutdown-notify.service
-install -m 0644 %{SOURCE4} %{buildroot}%{_libdir}/systemd/system/deviced-pre.service
-install -m 0644 %{SOURCE5} %{buildroot}%{_libdir}/systemd/system/devicectl-start@.service
-install -m 0644 %{SOURCE6} %{buildroot}%{_libdir}/systemd/system/devicectl-stop@.service
-ln -s ../deviced.service %{buildroot}%{_libdir}/systemd/system/multi-user.target.wants/deviced.service
+mkdir -p %{buildroot}%{_unitdir}/multi-user.target.wants
+ln -s ../deviced.service %{buildroot}%{_unitdir}/multi-user.target.wants/deviced.service
 # Temporary symlink
-ln -s deviced.service %{buildroot}%{_libdir}/systemd/system/system-server.service
-ln -s ../zbooting-done.service %{buildroot}%{_libdir}/systemd/system/graphical.target.wants/zbooting-done.service
-ln -s ../shutdown-notify.service %{buildroot}%{_libdir}/systemd/system/shutdown.target.wants/shutdown-notify.service
-ln -s ../devicectl-stop@.service %{buildroot}%{_libdir}/systemd/system/shutdown.target.wants/devicectl-stop@display.service
-mkdir -p %{buildroot}%{_sysconfdir}/systemd/default-extra-dependencies/ignore-units.d/
-ln -s %{_libdir}/systemd/system/deviced.service %{buildroot}%{_sysconfdir}/systemd/default-extra-dependencies/ignore-units.d/
+ln -s deviced.service %{buildroot}%{_unitdir}/system-server.service
+ln -s ../early-booting-done.service %{buildroot}%{_unitdir}/multi-user.target.wants/early-booting-done.service
 
-%if %SDB_PRESTART
-mkdir -p %{buildroot}%{_libdir}/systemd/system/basic.target.wants
-install -m 0644 %{SOURCE7} %{buildroot}%{_libdir}/systemd/system/sdb-prestart.service
-ln -s ../sdb-prestart.service %{buildroot}%{_libdir}/systemd/system/basic.target.wants/sdb-prestart.service
+mkdir -p %{buildroot}%{_unitdir}/graphical.target.wants
+ln -s ../zbooting-done.service %{buildroot}%{_unitdir}/graphical.target.wants/zbooting-done.service
+
+mkdir -p %{buildroot}%{_unitdir}/shutdown.target.wants
+ln -s ../shutdown-notify.service %{buildroot}%{_unitdir}/shutdown.target.wants/shutdown-notify.service
+ln -s ../devicectl-stop@.service %{buildroot}%{_unitdir}/shutdown.target.wants/devicectl-stop@display.service
+
+mkdir -p %{buildroot}%{_datadir}/dbus-1/system-services/
+install -m 0644 systemd/org.tizen.system.deviced.service %{buildroot}%{_datadir}/dbus-1/system-services/
+
+mkdir -p %{buildroot}%{_sysconfdir}/systemd/default-extra-dependencies/ignore-units.d/
+ln -s %{_unitdir}/deviced.service %{buildroot}%{_sysconfdir}/systemd/default-extra-dependencies/ignore-units.d/
+
+%if %{?sdb_prestart} == on
+mkdir -p %{buildroot}%{_unitdir}/basic.target.wants
+install -m 0644 systemd/sdb-prestart.service %{buildroot}%{_unitdir}/sdb-prestart.service
+ln -s ../sdb-prestart.service %{buildroot}%{_unitdir}/basic.target.wants/sdb-prestart.service
 %endif
 
 mkdir -p %{buildroot}%{_datadir}/license
@@ -128,90 +200,23 @@ cp LICENSE %{buildroot}/usr/share/license/%{name}
 cp LICENSE %{buildroot}/usr/share/license/libdeviced
 
 %post
-%if "%{?tizen_profile_name}" == "wearable"
-%else
-#memory type vconf key init
-vconftool set -t int memory/sysman/cradle_status 0 -i -s system::vconf_system
-vconftool set -t int memory/sysman/sliding_keyboard -1 -i -s system::vconf_system
-vconftool set -t int memory/sysman/hdmi 0 -i -s system::vconf_system
+%if %{?display_module} == on
+#db type vconf key init
+vconftool set -t int db/private/sysman/enhance_mode 0 -i -s tizen::vconf::platform::r # used in enhance-mobile
+vconftool set -t int db/private/sysman/enhance_scenario 0 -i -s tizen::vconf::platform::r # used in enhance-mobile
+vconftool set -t bool db/private/deviced/lcd_brightness_init 0 -i -s tizen::vconf::platform::r # used in display-dbus
 %endif
 
-#memory type vconf key init
-vconftool set -t int memory/sysman/mmc 0 -i -s system::vconf_system
-vconftool set -t int memory/sysman/earjack_key 0 -i -s system::vconf_system
-vconftool set -t int memory/sysman/added_usb_storage 0 -i -s system::vconf_system
-vconftool set -t int memory/sysman/removed_usb_storage 0 -i -s system::vconf_system
-vconftool set -t int memory/sysman/earjack -1 -i -s system::vconf_system
-vconftool set -t int memory/sysman/mmc_mount -1 -i -s system::vconf_system
-vconftool set -t int memory/sysman/mmc_unmount -1 -i -s system::vconf_system
-vconftool set -t int memory/sysman/mmc_format -1 -i -s system::vconf_system
-vconftool set -t int memory/sysman/mmc_format_progress 0 -i -s system::vconf_system
-vconftool set -t int memory/sysman/mmc_err_status 0 -i -s system::vconf_system
-vconftool set -t int memory/private/sysman/enhance_pid 0 -i -s system::vconf_system
-vconftool set -t int memory/private/sysman/siop_disable 0 -i -s system::vconf_system
-vconftool set -t string memory/private/sysman/added_storage_uevent "" -i -s system::vconf_system
-vconftool set -t string memory/private/sysman/removed_storage_uevent "" -u 5000 -i -s system::vconf_system
-vconftool set -t string memory/private/sysman/siop_level_uevent "" -i -s system::vconf_system
-#db type vconf key init
-vconftool set -t int db/sysman/mmc_dev_changed 0 -i -s system::vconf_system
-vconftool set -t int db/private/sysman/enhance_mode 0 -i -s system::vconf_system
-vconftool set -t int db/private/sysman/enhance_scenario 0 -i -s system::vconf_system
-vconftool set -t int db/private/sysman/enhance_tone 0 -i -s system::vconf_system
-vconftool set -t int db/private/sysman/enhance_outdoor 0 -i -s system::vconf_system
-vconftool set -t string db/private/sysman/mmc_device_id "" -i -s system::vconf_system
-
-#memory type vconf key init
-vconftool set -t int memory/sysman/usbhost_status -1 -i -s system::vconf_system
-vconftool set -t int memory/sysman/charger_status 0 -i -s system::vconf_system
-vconftool set -t int memory/sysman/charge_now 0 -i -s system::vconf_system
-vconftool set -t int memory/sysman/battery_status_low -1 -i -s system::vconf_system
-vconftool set -t int memory/sysman/battery_capacity -1 -i -s system::vconf_system
-vconftool set -t int memory/sysman/usb_status -1 -i -s system::vconf_system
-vconftool set -t int memory/sysman/factory_mode 0 -i -s system::vconf_system
-vconftool set -t int memory/sysman/stime_changed 0 -i -s system::vconf_system
-vconftool set -t int memory/sysman/power_off 0 -u 5000 -i -f -s system::vconf_system
-vconftool set -t int memory/deviced/boot_power_on 0 -u 5000 -i -f -s system::vconf_system
-vconftool set -t int memory/sysman/battery_level_status -1 -i -s system::vconf_system
-vconftool set -t int memory/sysman/low_memory 1 -i -s system::vconf_system
-
-#db type vconf key init
-vconftool set -t int db/private/sysman/cool_down_mode 0 -i -s system::vconf_system
-vconftool set -t bool db/private/deviced/lcd_brightness_init 0 -i -s system::vconf_system
-
-vconftool set -t int memory/pm/state 0 -i -g 5000 -s system::vconf_system
-vconftool set -t int memory/pm/camera_status 0 -i -s system::vconf_system
-vconftool set -t int memory/pm/battery_timetofull -1 -i -s system::vconf_system
-vconftool set -t int memory/pm/battery_timetoempty -1 -i -s system::vconf_system
-vconftool set -t int memory/pm/sip_status 0 -i -g 5000 -s system::vconf_system
-vconftool set -t int memory/pm/custom_brightness_status 0 -i -g 5000 -s system::vconf_system
-vconftool set -t bool memory/pm/brt_changed_lpm 0 -i -s system::vconf_system
-vconftool set -t int memory/pm/current_brt 60 -i -g 5000 -s system::vconf_system
-vconftool set -t int memory/pm/lcdoff_source 0 -i -g 5000 -s system::vconf_system
-vconftool set -t int memory/pm/key_ignore 0 -i -g 5000 -s system::vconf_system
-
+%if %{?usb_module} == on
 #USB client
-vconftool set -t int memory/usb/cur_mode "0" -u 0 -i -s system::vconf_system
-vconftool set -t int db/usb/sel_mode "1" -s system::vconf_system
-vconftool set -t int db/private/usb/usb_control "1" -u 0 -i -s system::vconf_system
-vconftool set -t int memory/private/usb/conf_enabled "0" -u 0 -i -s system::vconf_system
+vconftool set -t int db/private/usb/usb_control "1" -u 0 -i -s tizen::vconf::platform::r # used in usb-client-control
+%endif
 
 systemctl daemon-reload
 if [ $1 == 1 ]; then
     systemctl restart deviced.service
+    systemctl restart early-booting-done.service
     systemctl restart zbooting-done.service
-fi
-
-if [ $1 == 2 ]; then # upgrade begins, it's rpm -Uvh
-    #buxton could be started by socket activation
-   systemctl start buxton.service
-fi
-
-%pre
-#without updating services "daemon-reload" following systemctl stop is wait a
-# lot of time
-systemctl daemon-reload
-if [ $1 == 2 ]; then # it's upgrade, for rpm -Uvh
-    systemctl stop buxton.service
 fi
 
 %preun
@@ -224,65 +229,89 @@ fi
 systemctl daemon-reload
 
 %files -n deviced
-%{_bindir}/deviced-pre.sh
+%manifest %{name}.manifest
+%{_datadir}/license/%{name}
 %{_bindir}/deviced
-%{_bindir}/devicectl
-%{_bindir}/deviced-auto-test
-%{_datadir}/dbus-1/services/org.tizen.system.deviced-auto-test.service
-%{_libdir}/systemd/system/deviced-auto-test.service
-%{_libdir}/systemd/system/deviced.service
-%{_libdir}/systemd/system/multi-user.target.wants/deviced.service
+%{_datadir}/dbus-1/system-services/org.tizen.system.deviced.service
+%{_unitdir}/deviced.service
+%{_unitdir}/multi-user.target.wants/deviced.service
 %{_sysconfdir}/systemd/default-extra-dependencies/ignore-units.d/deviced.service
 # Temporary symlink service
-%{_libdir}/systemd/system/system-server.service
-%{_libdir}/systemd/system/zbooting-done.service
-%{_libdir}/systemd/system/graphical.target.wants/zbooting-done.service
-%{_libdir}/systemd/system/shutdown-notify.service
-%{_libdir}/systemd/system/shutdown.target.wants/shutdown-notify.service
-%{_libdir}/systemd/system/deviced-pre.service
-%{_libdir}/systemd/system/devicectl-stop@.service
-%{_libdir}/systemd/system/devicectl-start@.service
-%{_libdir}/systemd/system/shutdown.target.wants/devicectl-stop@display.service
-%if %SDB_PRESTART
-%{_libdir}/systemd/system/sdb-prestart.service
-%{_libdir}/systemd/system/basic.target.wants/sdb-prestart.service
+%{_unitdir}/system-server.service
+%{_unitdir}/zbooting-done.service
+%{_unitdir}/early-booting-done.service
+%{_unitdir}/graphical.target.wants/zbooting-done.service
+%{_unitdir}/multi-user.target.wants/early-booting-done.service
+%{_unitdir}/shutdown-notify.service
+%{_unitdir}/shutdown.target.wants/shutdown-notify.service
+%{_unitdir}/shutdown.target.wants/devicectl-stop@display.service
+%if %{?sdb_prestart} == on
+%{_unitdir}/sdb-prestart.service
+%{_unitdir}/basic.target.wants/sdb-prestart.service
 %endif
-%{_datadir}/license/%{name}
 %{_sysconfdir}/smack/accesses.d/deviced.efl
-/etc/deviced/pass.conf
-/etc/deviced/usb-client-configuration.conf
-/etc/deviced/usb-client-operation.conf
 %if "%{?tizen_profile_name}" == "wearable"
 %else
-/etc/deviced/led.conf
 %{_bindir}/movi_format.sh
+%endif
+%if %{?battery_module} == on
+%config %{_sysconfdir}/deviced/battery.conf
+%endif
+%if %{?block_module} == on
 %{_bindir}/mmc-smack-label
 %{_bindir}/fsck_msdosfs
 %{_bindir}/newfs_msdos
 %{_datadir}/license/fsck_msdosfs
 %{_datadir}/license/newfs_msdos
+%config %{_sysconfdir}/deviced/block.conf
+%config %{_sysconfdir}/deviced/mmc.conf
+%endif
+%if %{?display_module} == on
+%config %{_sysconfdir}/deviced/display.conf
+%endif
+%if %{?haptic_module} == on
+%config %{_sysconfdir}/deviced/haptic.conf
+%endif
+%if %{?led_module} == on
+%config %{_sysconfdir}/deviced/led.conf
+%endif
+%if %{?pass_module} == on
+%config %{_sysconfdir}/deviced/pass.conf
+%endif
+%if %{?pmqos_module} == on
+%config %{_sysconfdir}/deviced/pmqos.conf
+%endif
+%if %{?power_module} == on
+%config %{_sysconfdir}/deviced/power.conf
+%endif
+%if %{?storage_module} == on
+%config %{_sysconfdir}/deviced/storage.conf
+%endif
+%if %{?usb_module} == on
+%config %{_sysconfdir}/deviced/usb-client-configuration.conf
+%config %{_sysconfdir}/deviced/usb-client-operation.conf
 %endif
 
-%manifest deviced.manifest
-%attr(110,root,root) /opt/etc/dump.d/module.d/dump_pm.sh
-%{_sysconfdir}/deviced/display.conf
-%{_sysconfdir}/deviced/mmc.conf
-%{_sysconfdir}/deviced/battery.conf
-%{_sysconfdir}/deviced/pmqos.conf
-%{_sysconfdir}/deviced/storage.conf
-%{_sysconfdir}/deviced/haptic.conf
-
-%attr(750,root,root)%{_bindir}/start_dr.sh
+%files tools
+%manifest deviced-tools.manifest
+%{_bindir}/devicectl
+%{_bindir}/deviced-auto-test
+%{_datadir}/dbus-1/system-services/org.tizen.system.deviced-auto-test.service
+%{_unitdir}/deviced-auto-test.service
+%{_unitdir}/devicectl-stop@.service
+%{_unitdir}/devicectl-start@.service
+%if %{?usb_module} == on
 %if %ENGINEER_MODE
 %attr(750,root,root) %{_bindir}/set_usb_debug.sh
 %attr(750,root,root) %{_bindir}/direct_set_debug.sh
 %endif
+%endif
 
 %files -n libdeviced
+%manifest libdeviced.manifest
+%{_datadir}/license/libdeviced
 %defattr(-,root,root,-)
 %{_libdir}/libdeviced.so.*
-%{_datadir}/license/libdeviced
-%manifest libdeviced.manifest
 
 %files -n libdeviced-devel
 %defattr(-,root,root,-)

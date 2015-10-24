@@ -40,7 +40,7 @@ static void unit_test(int argc, char **argv)
 
 int main(int argc, char **argv)
 {
-	if (argc >= 2 )
+	if (argc >= 2)
 		unit_test(argc, argv);
 	else
 		test_main(argc, argv);

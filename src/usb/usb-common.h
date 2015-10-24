@@ -20,7 +20,8 @@
 #define __USB_COMMON_H__
 
 #include <vconf.h>
+#include "core/weaks.h"
 
-int get_cradle_status(void);
+int read_file(char *path, char *text, unsigned int len);
 
 #endif /* __USB_COMMON_H__ */

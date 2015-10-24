@@ -30,22 +30,21 @@ struct edbus_method {
 	E_DBus_Method_Cb func;
 };
 
-enum watch_id {
-	WATCH_DISPLAY_AUTOBRIGHTNESS_MIN,
-	WATCH_DISPLAY_LCD_TIMEOUT,
-	WATCH_DISPLAY_LOCK_STATE,
-	WATCH_DISPLAY_HOLD_BRIGHTNESS,
-	WATCH_HAPTIC_OPEN_DEVICE,
-	WATCH_POWER_RESETKEY_DISABLE,
-	WATCH_POWER_WAKEUPKEY,
-};
+static inline DBusMessage *make_reply_message(DBusMessage *msg, int ret)
+{
+	DBusMessageIter iter;
+	DBusMessage *reply;
+	reply = dbus_message_new_method_return(msg);
+	dbus_message_iter_init_append(reply, &iter);
+	dbus_message_iter_append_basic(&iter, DBUS_TYPE_INT32, &ret);
+	return reply;
+}
 
-struct watch {
-	enum watch_id id;
-	char *name;
-	int (*func)(char *name, enum watch_id id);
-};
-
+E_DBus_Object *register_edbus_object(const char *object_path, void *data);
+void unregister_edbus_object(E_DBus_Object *object);
+int register_edbus_interface_and_method(const char *path,
+		const char *interface,
+		const struct edbus_method *edbus_methods, int size);
 int register_edbus_method(const char *path, const struct edbus_method *edbus_methods, int size);
 int register_edbus_signal_handler(const char *path, const char *interface,
 		const char *name, E_DBus_Signal_Cb cb);
@@ -53,8 +52,10 @@ E_DBus_Interface *get_edbus_interface(const char *path);
 pid_t get_edbus_sender_pid(DBusMessage *msg);
 int broadcast_edbus_signal(const char *path, const char *interface,
 		const char *name, const char *sig, char *param[]);
-int register_edbus_watch(DBusMessage *msg, enum watch_id id, int (*func)(char *name, enum watch_id id));
-int unregister_edbus_watch(DBusMessage *msg, enum watch_id id);
+int register_edbus_watch(const char *sender,
+		void (*func)(const char *sender, void *data), void *data);
+int unregister_edbus_watch(const char *sender,
+		void (*func)(const char *sender, void *data));
 
 void edbus_init(void *data);
 void edbus_exit(void *data);

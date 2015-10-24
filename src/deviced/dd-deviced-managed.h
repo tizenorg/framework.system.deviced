@@ -47,15 +47,6 @@ extern "C" {
 int deviced_get_pid(const char *execpath);
 
 /**
- * @fn int deviced_set_datetime(time_t timet)
- * @brief This API is used to set date time.\n
- * 		Internally, this API call predefined action API. That is send a notify message. \n
- * @param[in] timet type of time which you want to set.
- * @return pid when the program is running, -1 if param is less than 0 or when failed set datetime.
- */
-int deviced_set_datetime(time_t timet);
-
-/**
  * @}
  */
 

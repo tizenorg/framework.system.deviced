@@ -26,6 +26,7 @@
 enum display_actor_id {
 	DISPLAY_ACTOR_POWER_KEY	= 1,
 	DISPLAY_ACTOR_MENU_KEY,
+	DISPLAY_ACTOR_TOUCH_KEY,
 	DISPLAY_ACTOR_API,
 	DISPLAY_ACTOR_GESTURE,
 };
@@ -40,6 +41,7 @@ enum display_capability {
 	DISPLAY_CAPA_LCDON		= 1 << 1,
 	DISPLAY_CAPA_LCDOFF		= 1 << 2,
 	DISPLAY_CAPA_POWEROFF		= 1 << 3,
+	DISPLAY_CAPA_UPDATE_LCD_TIMEOUT = 1 << 4,
 };
 
 void display_add_actor(struct display_actor_ops *actor);

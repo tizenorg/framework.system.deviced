@@ -20,7 +20,7 @@
 static const struct device_change_type {
 	char *name;
 	char *status;
-} device_change_types [] = {
+} device_change_types[] = {
 	{"tvout",	"1"},
 	{"tvout",	"0"},
 };
@@ -38,12 +38,12 @@ static int tvout(int index)
 	param[3] = device_change_types[index].status;
 
 	msg = dbus_method_sync_with_reply(DEVICED_BUS_NAME,
-			DEVICED_PATH_SYSNOTI,
-			DEVICED_INTERFACE_SYSNOTI,
+			DEVICED_PATH_EXTCON,
+			DEVICED_INTERFACE_EXTCON,
 			METHOD_SET_DEVICE, "siss", param);
 	if (!msg) {
 		_E("fail : %s %s %s %s",
-			DEVICED_BUS_NAME, DEVICED_PATH_SYSNOTI, DEVICED_INTERFACE_SYSNOTI,
+			DEVICED_BUS_NAME, DEVICED_PATH_EXTCON, DEVICED_INTERFACE_EXTCON,
 			METHOD_SET_DEVICE);
 		return -EBADMSG;
 	}

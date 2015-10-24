@@ -182,7 +182,8 @@ int get_cpu_online(int cpu)
 	int online;
 	int ret;
 
-	ret = sprintf(path, "/sys/devices/system/cpu/cpu%d/online", cpu);
+	ret = snprintf(path, sizeof(path),
+			"/sys/devices/system/cpu/cpu%d/online", cpu);
 	if (ret < 0)
 		return -EINVAL;
 
@@ -197,7 +198,8 @@ int set_cpu_online(int cpu, int online)
 	char path[BUFF_MAX];
 	int ret;
 
-	ret = sprintf(path, "/sys/devices/system/cpu/cpu%d/online", cpu);
+	ret = snprintf(path, sizeof(path),
+			"/sys/devices/system/cpu/cpu%d/online", cpu);
 	if (ret < 0)
 		return -EINVAL;
 
@@ -235,7 +237,7 @@ static int pass_parse_scenario(struct parse_result *result, void *user_data,
 	struct pass_policy *policy = user_data;
 	struct pass_scenario_policy *scenario = &policy->scenario;
 	char section_name[BUFF_MAX];
-	int i, len;
+	int i;
 
 	if (!policy && !scenario && !result)
 		return 0;
@@ -254,8 +256,8 @@ static int pass_parse_scenario(struct parse_result *result, void *user_data,
 			scenario->num_scenarios = atoi(result->value);
 
 			if (scenario->num_scenarios > 0 && !scenario->list) {
-				scenario->list = malloc(sizeof(struct pass_scenario)
-							* scenario->num_scenarios);
+				scenario->list = malloc(
+						sizeof(struct pass_scenario) * scenario->num_scenarios);
 				if (!scenario->list) {
 					_E("cannot allocate memory for Scenario\n");
 					return -EINVAL;
@@ -275,9 +277,8 @@ static int pass_parse_scenario(struct parse_result *result, void *user_data,
 
 	/* Parse 'Scenario' section */
 	if (MATCH(result->name, "name")) {
-		len = sizeof(scenario->list[index].name) - 1;
-		strncpy(scenario->list[index].name, result->value, len);
-		scenario->list[index].name[len] = '\0';
+		strncpy(scenario->list[index].name, result->value,
+				sizeof(scenario->list[index].name));
 	} else if (MATCH(result->name, "support")) {
 		scenario->list[index].state = is_supported(result->value);
 		if (scenario->list[index].state < 0)
@@ -379,7 +380,7 @@ static int pass_parse_core(struct parse_result *result, void *user_data)
 			return -EINVAL;
 
 		_I("Match compatible string : %s\n", compatible);
-       } else if (MATCH(result->name, "pass_support"))
+	} else if (MATCH(result->name, "pass_support"))
 		policy->state = atoi(result->value);
 	else if (MATCH(result->name, "pass_gov_type"))
 		policy->gov_type = atoi(result->value);
@@ -409,8 +410,8 @@ static int pass_parse_core(struct parse_result *result, void *user_data)
 	}
 
 	if (policy->num_levels > 0 && !policy->pass_table) {
-		policy->pass_table = malloc(sizeof(struct pass_table)
-			       * policy->num_levels);
+		policy->pass_table = malloc(
+				sizeof(struct pass_table) * policy->num_levels);
 		if (!policy->pass_table) {
 			_E("cannot allocate memory for pass_table\n");
 			return -EINVAL;
@@ -474,7 +475,8 @@ static int pass_load_config(struct parse_result *result, void *user_data)
 
 	/* Parsing 'Scenario' section */
 	for (index = 0; index < scenario->num_scenarios; index++) {
-		ret = sprintf(section_name, "Scenario%d", index);
+		ret = snprintf(section_name, sizeof(section_name),
+				"Scenario%d", index);
 
 		if (MATCH(result->section, section_name)) {
 			ret = pass_parse_scenario(result, user_data, index);
@@ -518,10 +520,10 @@ int get_pass_table(struct pass_policy *policy, char *pass_conf_path)
 
 void put_pass_table(struct pass_policy *policy)
 {
-	if(policy->pass_table)
+	if (policy->pass_table)
 		free(policy->pass_table);
 
-	if(policy->scenario.list)
+	if (policy->scenario.list)
 		free(policy->scenario.list);
 }
 

@@ -56,7 +56,7 @@ int pass_radiation_governor(struct pass_policy *policy)
 	int i;
 	int j;
 	int64_t time;
-	static int64_t last_time = 0;
+	static int64_t last_time;
 
 	for (i = 0; i < policy->num_pass_cpu_stats; i++) {
 		time = cpu_stats[i].time;

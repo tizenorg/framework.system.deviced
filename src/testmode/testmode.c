@@ -111,7 +111,6 @@ static void testmode_exit(void *data)
 }
 
 static const struct device_ops battery_device_ops = {
-	.priority = DEVICE_PRIORITY_NORMAL,
 	.name     = "testmode",
 	.init     = testmode_init,
 	.exit     = testmode_exit,

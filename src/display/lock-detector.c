@@ -186,30 +186,23 @@ void free_lock_info_list(void)
 	lock_info_list = NULL;
 }
 
-void print_lock_info_list(int fd)
+void print_lock_info_list(FILE *fp)
 {
 	struct lock_info *info;
 	Eina_List *l;
-	char buf[255];
 
 	if (!lock_info_list)
 		return;
 
-	snprintf(buf, sizeof(buf),
-	    "current time : %u ms\n", get_time());
-	write(fd, buf, strlen(buf));
-
-	snprintf(buf, sizeof(buf),
-	    "[%10s %6s] %6s %10s %10s %10s %s\n", "hash", "state",
+	LOG_DUMP(fp, "current time : %u ms\n", get_time());
+	LOG_DUMP(fp, "[%10s %6s] %6s %10s %10s %10s %s\n", "hash", "state",
 	    "count", "locktime", "unlocktime", "time", "process name");
-	write(fd, buf, strlen(buf));
 
 	EINA_LIST_FOREACH(lock_info_list, l, info) {
 		long time = 0;
 		if (info->locktime != 0 && info->unlocktime == 0)
 			time = get_time() - info->locktime;
-		snprintf(buf, sizeof(buf),
-		    "[%10u %6d] %6d %10u %10u %10u %s\n",
+		LOG_DUMP(fp, "[%10u %6d] %6d %10u %10u %10u %s\n",
 		    info->hash,
 		    info->state,
 		    info->count,
@@ -217,7 +210,6 @@ void print_lock_info_list(int fd)
 		    info->unlocktime,
 		    info->time + time,
 		    info->name);
-		write(fd, buf, strlen(buf));
 	}
 }
 

@@ -29,7 +29,7 @@
 int set_lock_time(const char *pname, int state);
 int set_unlock_time(const char *pname, int state);
 void free_lock_info_list(void);
-void print_lock_info_list(int fd);
+void print_lock_info_list(FILE *fp);
 
 #endif	//_LOCK_DETECTOR_H_
 

@@ -115,7 +115,6 @@ static void touch_exit(void *data)
 }
 
 static const struct device_ops touch_device_ops = {
-	.priority = DEVICE_PRIORITY_NORMAL,
 	.name     = "touch",
 	.init     = touch_init,
 	.exit     = touch_exit,

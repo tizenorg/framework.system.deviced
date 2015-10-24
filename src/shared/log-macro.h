@@ -22,6 +22,24 @@
 
 #ifdef ENABLE_DLOG
 #include <dlog.h>
+#ifdef LIBRARY_USE_DLOG_MAIN
+#define _D(fmt, arg...) \
+	do { LOGD(fmt, ##arg); } while(0)
+#define _I(fmt, arg...) \
+	do { LOGI(fmt, ##arg); } while(0)
+#define _W(fmt, arg...) \
+	do { LOGW(fmt, ##arg); } while(0)
+#define _E(fmt, arg...) \
+	do { LOGE(fmt, ##arg); } while(0)
+#define _SD(fmt, arg...) \
+	do { SECURE_LOGD(fmt, ##arg); } while(0)
+#define _SI(fmt, arg...) \
+	do { SECURE_LOGI(fmt, ##arg); } while(0)
+#define _SW(fmt, arg...) \
+	do { SECURE_LOGW(fmt, ##arg); } while(0)
+#define _SE(fmt, arg...) \
+	do { SECURE_LOGE(fmt, ##arg); } while(0)
+#else
 #define _D(fmt, arg...) \
 	do { SLOGD(fmt, ##arg); } while(0)
 #define _I(fmt, arg...) \
@@ -38,6 +56,7 @@
 	do { SECURE_SLOGW(fmt, ##arg); } while(0)
 #define _SE(fmt, arg...) \
 	do { SECURE_SLOGE(fmt, ##arg); } while(0)
+#endif
 #else
 #define _D(...)  do { } while (0)
 #define _I(...)  do { } while (0)
@@ -48,4 +67,7 @@
 #define _SW(...)   do { } while (0)
 #define _SE(...)   do { } while (0)
 #endif
+
+#define LOG_DUMP(fp, fmt, arg...) \
+	do { if (fp) fprintf(fp, fmt, ##arg); else _E(fmt, ##arg); } while(0)
 #endif

@@ -21,6 +21,8 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <stdbool.h>
+#include <bundle.h>
+#include <eventsystem.h>
 
 #include "core.h"
 #include "util.h"
@@ -35,20 +37,36 @@ static const char *setting_keys[SETTING_GET_END] = {
 	[SETTING_TO_NORMAL] = VCONFKEY_SETAPPL_LCD_TIMEOUT_NORMAL,
 	[SETTING_BRT_LEVEL] = VCONFKEY_SETAPPL_LCD_BRIGHTNESS,
 	[SETTING_LOCK_SCREEN] = VCONFKEY_IDLE_LOCK_STATE,
-	[SETTING_SMART_STAY] = VCONFKEY_SETAPPL_SMARTSCREEN_SMARTSTAY_STATUS,
-	[SETTING_BOOT_POWER_ON_STATUS] = VCONFKEY_DEVICED_BOOT_POWER_ON_STATUS,
-	[SETTING_POWER_CUSTOM_BRIGHTNESS] = VCONFKEY_PM_CUSTOM_BRIGHTNESS_STATUS,
-	[SETTING_ACCESSIBILITY_TTS] = VCONFKEY_SETAPPL_ACCESSIBILITY_TTS,
 };
 
 static int lock_screen_state = VCONFKEY_IDLE_UNLOCK;
-static bool lock_screen_bg_state = false;
-static int force_lcdtimeout = 0;
-static int custom_on_timeout = 0;
-static int custom_normal_timeout = 0;
-static int custom_dim_timeout = 0;
+static bool lock_screen_bg_state;
+static int force_lcdtimeout;
+static int custom_on_timeout;
+static int custom_normal_timeout;
+static int custom_dim_timeout;
 
 int (*update_pm_setting) (int key_idx, int val);
+
+static void display_state_send_system_event(int state)
+{
+	bundle *b;
+	const char *str;
+
+	if (state == S_NORMAL)
+		str = EVT_VAL_DISPLAY_NORMAL;
+	else if (state == S_LCDDIM)
+		str = EVT_VAL_DISPLAY_DIM;
+	else if (state == S_LCDOFF)
+		str = EVT_VAL_DISPLAY_OFF;
+	else
+		return;
+
+	b = bundle_create();
+	bundle_add_str(b, EVT_KEY_DISPLAY_STATE, str);
+	eventsystem_send_system_event(SYS_EVENT_DISPLAY_STATE, b);
+	bundle_free(b);
+}
 
 int set_force_lcdtimeout(int timeout)
 {
@@ -105,6 +123,7 @@ int get_usb_status(int *val)
 
 int set_setting_pmstate(int val)
 {
+	display_state_send_system_event(val);
 	return vconf_set_int(VCONFKEY_PM_STATE, val);
 }
 
@@ -154,6 +173,12 @@ int get_run_timeout(int *timeout)
 	int vconf_timeout = -1;
 	int on_timeout;
 	int ret;
+
+	if (display_conf.lcd_always_on) {
+		/* 0(zero) timeout means always on. */
+		*timeout = 0;
+		return 0;
+	}
 
 	if (custom_normal_timeout > 0) {
 		*timeout = custom_normal_timeout;
@@ -208,22 +233,17 @@ int set_custom_lcdon_timeout(int timeout)
 static int setting_cb(keynode_t *key_nodes, void *data)
 {
 	keynode_t *tmp = key_nodes;
+	int index;
 
-	if ((int)data > SETTING_END) {
+	index = (int)((intptr_t)data);
+
+	if (index > SETTING_END) {
 		_E("Unknown setting key: %s, idx=%d",
-		       vconf_keynode_get_name(tmp), (int)data);
+		       vconf_keynode_get_name(tmp), index);
 		return -1;
 	}
-	if (update_pm_setting != NULL) {
-		switch((int)data) {
-			case SETTING_ACCESSIBILITY_TTS:
-				update_pm_setting((int)data, vconf_keynode_get_bool(tmp));
-				break;
-			default:
-				update_pm_setting((int)data, vconf_keynode_get_int(tmp));
-				break;
-		}
-	}
+	if (update_pm_setting != NULL)
+		update_pm_setting(index, vconf_keynode_get_int(tmp));
 
 	return 0;
 }
@@ -237,7 +257,7 @@ int init_setting(int (*func) (int key_idx, int val))
 
 	for (i = SETTING_BEGIN; i < SETTING_GET_END; i++) {
 		vconf_notify_key_changed(setting_keys[i], (void *)setting_cb,
-					 (void *)i);
+					 (void *)((intptr_t)i));
 	}
 
 	return 0;
@@ -246,9 +266,8 @@ int init_setting(int (*func) (int key_idx, int val))
 int exit_setting(void)
 {
 	int i;
-	for (i = SETTING_BEGIN; i < SETTING_GET_END; i++) {
+	for (i = SETTING_BEGIN; i < SETTING_GET_END; i++)
 		vconf_ignore_key_changed(setting_keys[i], (void *)setting_cb);
-	}
 
 	return 0;
 }

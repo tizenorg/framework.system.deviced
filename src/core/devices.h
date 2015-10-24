@@ -22,6 +22,7 @@
 
 #include <errno.h>
 #include "common.h"
+#include "list.h"
 
 enum device_priority {
 	DEVICE_PRIORITY_NORMAL = 0,
@@ -39,17 +40,24 @@ enum device_flags {
 	LCD_ON_BY_POWER_KEY           = 0x00200000,
 	LCD_ON_BY_EVENT               = 0x00400000,
 	LCD_ON_BY_TOUCH               = 0x00800000,
+	LCD_OFF_BY_POWER_KEY          = 0x01000000,
+	LCD_OFF_BY_TIMEOUT            = 0x02000000,
+	LCD_OFF_BY_EVENT              = 0x04000000,
+	LCD_OFF_LATE_MODE             = 0x08000000,
 };
 
 struct device_ops {
 	enum device_priority priority;
 	char *name;
+	int (*probe) (void *data);
 	void (*init) (void *data);
 	void (*exit) (void *data);
 	int (*start) (enum device_flags flags);
 	int (*stop) (enum device_flags flags);
 	int (*status) (void);
 	int (*execute) (void *data);
+	int (*dump) (FILE *fp, int mode, void *dump_data);
+	void *dump_data;
 };
 
 enum device_ops_status {
@@ -114,6 +122,7 @@ static void __DESTRUCTOR__ module_exit(void)	\
 	remove_device(dev);	\
 }
 
+dd_list *get_device_list_head(void);
 void add_device(const struct device_ops *dev);
 void remove_device(const struct device_ops *dev);
 
@@ -123,12 +132,22 @@ int check_default(const struct device_ops *dev);
 #define NOT_SUPPORT_OPS(dev) \
 	((check_default(dev))? 1 : 0)
 
+#define FIND_DEVICE(dev, name) do { \
+	if (!dev) dev = find_device(name); \
+} while(0)
+
 #define FIND_DEVICE_INT(dev, name) do { \
 	if (!dev) dev = find_device(name); if(check_default(dev)) return -ENODEV; \
 } while(0)
 
 #define FIND_DEVICE_VOID(dev, name) do { \
 	if (!dev) dev = find_device(name); if(check_default(dev)) return; \
+} while(0)
+
+#define GET_DEVICE_STATUS(name, defaults, ret) do { \
+	const struct device_ops *dev; \
+	dev = find_device(name); \
+	ret = dev->status ? dev->status() : defaults; \
 } while(0)
 
 #endif

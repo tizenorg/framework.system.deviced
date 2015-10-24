@@ -43,11 +43,10 @@ static void cpuinfo_revision(void)
 	dbus_message_unref(msg);
 	dbus_error_free(&err);
 	_E("%s-%s : %d", DEVICED_INTERFACE_SYSNOTI, METHOD_GET_REVISION, val);
-	if(val >= 8) {
+	if (val >= 8)
 		_D("Rinato Neo");
-	} else {
+	else
 		_D("Rinato");
-	}
 	if (val < 0)
 		_R("[NG] ---- %s", __func__);
 	else

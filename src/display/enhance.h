@@ -20,12 +20,6 @@
 #ifndef __LCD_HANDLER_H__
 #define __LCD_HANDLER_H__
 
-int changed_enhance_value(int pid, int prop, int val);
-
-#ifdef MICRO_DD
 static inline int set_enhance_pid(int pid) {return 0;}
-#else
-int set_enhance_pid(int pid);
-#endif
 
 #endif /* __LCD_HANDLER_H__ */

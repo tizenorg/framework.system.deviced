@@ -19,13 +19,14 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <pthread.h>
 #include <errno.h>
+#include <time.h>
 #include <vconf.h>
 #include <device-node.h>
 
 #include "core/log.h"
+#include "core/common.h"
 
 #define SAMPLE_INTERVAL	50
 #define ITERATION_INFINITE	255
@@ -66,7 +67,7 @@ static int led_set_brt(enum led_brt brt)
 
 static void clean_up(void *arg)
 {
-	struct led_pattern *pt = (struct led_pattern*)arg;
+	struct led_pattern *pt = (struct led_pattern *)arg;
 	int torch_status = 0;
 
 	_D("[%u] Clean up thread", PTHREAD_SELF);
@@ -91,10 +92,11 @@ static void clean_up(void *arg)
 	tid = 0;
 }
 
-static void* play_cb(void *arg)
+static void *play_cb(void *arg)
 {
-	struct led_pattern *pt = (struct led_pattern*)arg;
+	struct led_pattern *pt = (struct led_pattern *)arg;
 	int val;
+	struct timespec time = {0,};
 
 	_D("[%u] Start thread", PTHREAD_SELF);
 	pthread_cleanup_push(clean_up, arg);
@@ -108,7 +110,7 @@ static void* play_cb(void *arg)
 	led_set_brt(LED_OFF);
 	while (pt->cnt) {
 		/* do not reset index to use exisiting value */
-		for ( ; pt->index < pt->len; pt->index++) {
+		for (; pt->index < pt->len; pt->index++) {
 			val = (int)(pt->buffer[pt->index] - '0');
 			/* Verify buffer data */
 			if (val & 0xFE)
@@ -117,7 +119,8 @@ static void* play_cb(void *arg)
 			led_set_brt(val);
 
 			/* Sleep time 50*999us = 49.950ms (Vibration unit 50ms) */
-			usleep(SAMPLE_INTERVAL*999);
+			time.tv_nsec = SAMPLE_INTERVAL * 999 * 1000;
+			nanosleep(&time, NULL);
 		}
 
 		/* reset index */
@@ -131,13 +134,14 @@ static void* play_cb(void *arg)
 	led_set_brt(LED_OFF);
 
 	/* Sleep 500ms before turning on assistive light */
-	usleep(500000);
+	time.tv_nsec = 500 * NANO_SECOND_MULTIPLIER;
+	nanosleep(&time, NULL);
 
 error:
 	pthread_cleanup_pop(1);
 
 	_D("[%u] End thread", PTHREAD_SELF);
-	pthread_exit((void*)0);
+	pthread_exit((void *)0);
 }
 
 static int create_thread(struct led_pattern *pattern)
@@ -151,7 +155,7 @@ static int create_thread(struct led_pattern *pattern)
 
 	ret = pthread_create(&tid, NULL, play_cb, pattern);
 	if (ret != 0) {
-		_E("fail to create thread : %s", strerror(errno));
+		_E("fail to create thread : %d", errno);
 		return -errno;
 	}
 
@@ -170,13 +174,13 @@ static int cancel_thread(void)
 
 	ret = pthread_cancel(tid);
 	if (ret != 0) {
-		_E("fail to cancel thread(%d) : %s", tid, strerror(errno));
+		_E("fail to cancel thread(%d) : %d", tid, errno);
 		return -errno;
 	}
 
 	ret = pthread_join(tid, &retval);
 	if (ret != 0) {
-		_E("fail to join thread(%d) : %s", tid, strerror(errno));
+		_E("fail to join thread(%d) : %d", tid, errno);
 		return -errno;
 	}
 
@@ -199,7 +203,7 @@ static int detach_thread(void)
 
 	ret = pthread_detach(tid);
 	if (ret != 0) {
-		_E("fail to detach thread(%d) : %s", tid, strerror(errno));
+		_E("fail to detach thread(%d) : %d", tid, errno);
 		return ret;
 	}
 
@@ -221,7 +225,7 @@ static int load_file(const char *path, char **buffer, int *len)
 	/* Open file */
 	fp = fopen(path, "rb");
 	if (!fp) {
-		_E("fail to open file(%s) : %s", path, strerror(errno));
+		_E("fail to open file(%s) : %d", path, errno);
 		return -errno;
 	}
 
@@ -235,13 +239,13 @@ static int load_file(const char *path, char **buffer, int *len)
 
 	buf = malloc(l*sizeof(char));
 	if (!buf) {
-		_E("fail to allocate memory : %s", strerror(errno));
+		_E("fail to allocate memory : %d", errno);
 		goto error;
 	}
 
 	/* Read file contents into buffer */
 	if (fread(buf, 1, l, fp) < l) {
-		_E("fail to read file data : %s", strerror(errno));
+		_E("fail to read file data : %d", errno);
 		goto error;
 	}
 

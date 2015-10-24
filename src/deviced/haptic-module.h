@@ -82,6 +82,7 @@ typedef enum
 #define HAPTIC_MODULE_INVALID_ARGUMENT   						-3
 #define HAPTIC_MODULE_OPERATION_FAILED   						-4
 #define HAPTIC_MODULE_NOT_SUPPORTED								-5
+#define HAPTIC_MODULE_SERVICE_BUSY								-12
 
 /**
  * @par Description:

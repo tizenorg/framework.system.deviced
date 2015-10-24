@@ -47,13 +47,8 @@ IF(BUILD_EXECUTABLE)
 
 ########################################################
 # Build options:
-# -DMICRO_DD - for tizenw project
-# -DTIZEN_ENGINEER_MODE - 
+# -DTIZEN_ENGINEER_MODE -
 ########################################################
-IF("$ENV{CFLAGS}" MATCHES "-DMICRO_DD")
-	OPTION(USE_MICRO_DD "Use Micro DD" ON)
-ENDIF()
-
 IF("$ENV{CFLAGS}" MATCHES "-DTIZEN_ENGINEER_MODE")
 	OPTION(USE_ENGINEER_MODE "Use Engineer mode" ON)
 ENDIF()
@@ -69,6 +64,39 @@ IF("$ENV{CFLAGS}" MATCHES "-DSYSTEMD_SHUTDOWN")
 ENDIF()
 
 ########################################################
+# Deviced Macros
+########################################################
+MACRO(ADD_SOURCE DIR OUT)
+	FILE(GLOB ALL_SRCS "${DIR}/*.c")
+	FOREACH(SRC ${ALL_SRCS})
+		IF(NOT ${SRC} MATCHES "mobile|wearable|tv|none")
+			SET(D_SRCS ${D_SRCS} ${SRC})
+		ENDIF()
+	ENDFOREACH()
+	FILE(GLOB S_SRCS "${DIR}/*-${PROFILE}.c")
+	IF(DEFINED S_SRCS)
+		SET(D_SRCS ${D_SRCS} ${S_SRCS})
+	ENDIF()
+	SET(${OUT} ${D_SRCS})
+ENDMACRO()
+
+MACRO(INSTALL_CONF DIR CONF)
+	SET(T_CONF ${DIR}/${CONF}-${PROFILE}.conf)
+	SET(E_CONF ${DIR}/${CONF}-emul-${PROFILE}.conf)
+	IF(USE_EMULATOR AND EXISTS ${E_CONF})
+		SET(T_CONF ${E_CONF})
+	ENDIF()
+	IF(NOT EXISTS ${T_CONF})
+		SET(T_CONF ${DIR}/${CONF}.conf)
+	ENDIF()
+	IF(DEFINED T_CONF)
+		INSTALL(FILES ${CMAKE_CURRENT_SOURCE_DIR}/${T_CONF}
+			DESTINATION /etc/deviced
+			RENAME ${CONF}.conf)
+	ENDIF()
+ENDMACRO()
+
+########################################################
 # Deviced CMakeLists.txt
 ########################################################
 SET(PREFIX ${CMAKE_INSTALL_PREFIX})
@@ -80,249 +108,158 @@ SET(CONFDIR "/etc/${PROJECT_NAME}")
 SET(VERSION 0.1.0)
 
 SET(SRCS
-	src/battery/config.c
-	src/battery/lowbat-handler.c
-	src/core/buxton-helper.c
-	src/core/device-idler.c
-	src/core/device-notifier.c
-	src/core/main.c
-	src/core/launch.c
-	src/core/devices.c
-	src/core/sig-handler.c
-	src/core/log.c
-	src/core/device-change-handler.c
+	src/apps/apps.c
+	src/control/control.c
 	src/core/common.c
 	src/core/config-parser.c
-	src/core/execute.c
+	src/core/device-nodes.c
+	src/core/device-idler.c
+	src/core/device-notifier.c
+	src/core/devices.c
 	src/core/edbus-handler.c
-	src/core/power-supply.c
-	src/earjack/earjack.c
+	src/core/execute.c
+	src/core/launch.c
+	src/core/log.c
+	src/core/main.c
+	src/core/sig-handler.c
+	src/core/udev.c
+	src/core/weaks.c
 	src/proc/cpu-info.c
-	src/board/board-info.c
 	src/proc/proc-handler.c
-	src/storage/storage.c
-	src/ta/ta-handler.c
-	src/time/time-handler.c
-	src/ticker/ticker.c
-	src/testmode/testmode.c
-)
-
-IF(USE_MICRO_DD)
-SET(SRCS ${SRCS}
-	src/cool-down/cool-down-micro.c
-)
-ELSE()
-SET(SRCS ${SRCS}
-	src/cool-down/cool-down.c
-)
-ENDIF()
-
-SET(SRCS ${SRCS}
-	src/hdmi-cec/libcec.c
-	src/hdmi-cec/cec.c
-)
-SET(SRCS ${SRCS}
-	src/gpio/gpio.c
-	src/gpio/buzzer.c
-	src/gpio/hall.c
-	src/gpio/sim.c
-)
-
-IF(USE_SYSTEMD_SHUTDOWN)
-SET(SRCS ${SRCS}
-	src/power/systemd-power.c
-)
-ELSE()
-SET(SRCS ${SRCS}
-	src/power/power-handler.c
-)
-ENDIF()
-
-#device sleep
-SET(SRCS ${SRCS}
 	src/sleep/sleep.c
+	src/time/time-handler.c
 )
 
-SET(SRCS ${SRCS}
-	src/apps/apps.c
-	src/apps/cool-down.c
-	src/apps/lowbat.c
-	src/apps/poweroff.c
-	src/apps/lowmem.c
-	src/pmqos/pmqos.c
-	src/pmqos/pmqos-plugin.c
-	src/telephony/telephony.c
-)
+IF(BATTERY_MODULE STREQUAL on)
+	ADD_SOURCE(src/battery BATTERY_SRCS)
+	SET(SRCS ${SRCS} ${BATTERY_SRCS})
+ENDIF()
 
-IF(NOT USE_MICRO_DD)
-SET(SRCS ${SRCS}
-	src/battery/battery-time.c
-	src/extcon/extcon.c
-	src/hall/hall-handler.c
-	src/apps/launch.c
-	src/apps/mmc.c
-	src/apps/usb.c
-	src/apps/usbotg.c
-	src/apps/system.c
-)
+IF(BLOCK_MODULE STREQUAL on)
+	ADD_SOURCE(src/block BLOCK_SRCS)
+	SET(SRCS ${SRCS} ${BLOCK_SRCS})
 
-SET(SRCS ${SRCS}
-	src/mmc/mmc-handler.c
-	src/mmc/uevent.c
-	src/mmc/config.c
-	src/mmc/cprm.c
-	src/mmc/app2ext.c
-)
+	ADD_SOURCE(src/mmc MMC_SRCS)
+	SET(SRCS ${SRCS} ${MMC_SRCS})
+ENDIF()
 
-FIND_PROGRAM(UNAME NAMES uname)
-EXEC_PROGRAM("${UNAME}" ARGS "-m" OUTPUT_VARIABLE "ARC")
-IF(USE_EMULATOR)
-SET(SRCS ${SRCS}
-	src/mmc/ext4.c
-	)
-ENDIF(USE_EMULATOR)
+IF(BLUETOOTH_MODULE STREQUAL on)
+	ADD_SOURCE(src/bluetooth BLUETOOTH_SRCS)
+	SET(SRCS ${SRCS} ${BLUETOOTH_SRCS})
+ENDIF()
 
-SET(SRCS ${SRCS}
-	src/mmc/exfat.c
-	src/mmc/vfat.c
-)
+IF(EXTCON_MODULE STREQUAL on)
+	ADD_SOURCE(src/extcon EXTCON_SRCS)
+	SET(SRCS ${SRCS} ${EXTCON_SRCS})
+ENDIF()
 
-SET(SRCS ${SRCS}
-	src/ode/ode.c
-	src/ode/noti.c
-)
-ENDIF(NOT USE_MICRO_DD)
+IF(HAPTIC_MODULE STREQUAL on)
+	ADD_SOURCE(src/haptic HAPTIC_SRCS)
+	SET(SRCS ${SRCS} ${HAPTIC_SRCS})
+ENDIF()
 
-# display(pm)
-SET(SRCS ${SRCS}
-	src/display/core.c
-	src/display/display-dbus.c
-	src/display/hbm.c
-	src/display/device-interface.c
-	src/display/lock-detector.c
-	src/display/poll.c
-	src/display/setting.c
-	src/display/display-ops.c
-	src/display/display-actor.c
-	src/display/auto-brightness.c
-)
+IF(HDMI_CEC_MODULE STREQUAL on)
+	ADD_SOURCE(src/hdmi-cec HDMI_CEC_SRCS)
+	SET(SRCS ${SRCS} ${HDMI_CEC_SRCS})
+ENDIF()
 
-IF(USE_MICRO_DD)
-SET(SRCS ${SRCS}
-	src/display/alpm.c
-	src/display/key-filter-micro.c
-)
-ELSE()
-SET(SRCS ${SRCS}
-	src/display/brightness.c
-	src/display/key-filter.c
-	src/display/enhance.c
-	src/display/smartstay.c
-)
-ENDIF(USE_MICRO_DD)
+IF(LED_MODULE STREQUAL on)
+	ADD_SOURCE(src/led LED_SRCS)
+	SET(SRCS ${SRCS} ${LED_SRCS})
+ENDIF()
 
-SET(SRCS ${SRCS}
-	src/led/ir.c
-	src/led/torch.c
-	src/led/pattern.c
-	src/led/noti.c
-)
+IF(PASS_MODULE STREQUAL on)
+	ADD_SOURCE(src/pass PASS_SRCS)
+	SET(SRCS ${SRCS} ${PASS_SRCS})
+ENDIF()
 
-SET(SRCS ${SRCS}
-	src/pass/pass.c
-	src/pass/pass-core.c
-	src/pass/pass-gov-step.c
-	src/pass/pass-gov-radiation.c
-	src/pass/pass-plugin.c
-)
+IF(PMQOS_MODULE STREQUAL on)
+	ADD_SOURCE(src/pmqos PMQOS_SRCS)
+	SET(SRCS ${SRCS} ${PMQOS_SRCS})
+ENDIF()
 
-SET(SRCS ${SRCS}
-	src/touch/touchscreen.c)
+IF(POWERSAVER_MODULE STREQUAL on)
+	ADD_SOURCE(src/powersaver POWERSAVER_SRCS)
+	SET(SRCS ${SRCS} ${POWERSAVER_SRCS})
+ENDIF()
 
-IF(NOT USE_MICRO_DD)
-SET(SRCS ${SRCS}
-	src/touch/touch.c
-	src/touch/touchkey.c
-	src/touch/touch-controller.c
-	src/touch/touch-plugin.c)
+IF(STORAGE_MODULE STREQUAL on)
+	ADD_SOURCE(src/storage STORAGE_SRCS)
+	SET(SRCS ${SRCS} ${STORAGE_SRCS})
+ENDIF()
 
+IF(TELEPHONY_MODULE STREQUAL on)
+	ADD_SOURCE(src/telephony TELEPHONY_SRCS)
+	SET(SRCS ${SRCS} ${TELEPHONY_SRCS})
+ENDIF()
 
-SET(SRCS ${SRCS}
-	src/led/rgb.c
-	src/led/conf.c
-)
-ENDIF(NOT USE_MICRO_DD)
+IF(TOUCH_MODULE STREQUAL on)
+	ADD_SOURCE(src/touch TOUCH_SRCS)
+	SET(SRCS ${SRCS} ${TOUCH_SRCS})
 
-SET(SRCS ${SRCS}
-	src/control/control.c
-)
+	ADD_SOURCE(src/touchscreen TOUCHSCREEN_SRCS)
+	SET(SRCS ${SRCS} ${TOUCHSCREEN_SRCS})
+ENDIF()
 
-SET(SRCS ${SRCS}
-	src/haptic/haptic.c
-	src/haptic/external.c
-	src/haptic/standard.c
-	src/haptic/emulator.c)
+IF(TZIP_MODULE STREQUAL on)
+	ADD_SOURCE(src/tzip TZIP_SRCS)
+	SET(SRCS ${SRCS} ${TZIP_SRCS})
+ENDIF()
+
+IF(POWER_MODULE STREQUAL on)
+	IF(USE_SYSTEMD_SHUTDOWN)
+		SET(SRCS ${SRCS} src/power/systemd-power.c)
+	ELSE()
+		SET(SRCS ${SRCS} src/power/power-handler.c)
+	ENDIF()
+ENDIF()
+
+IF(DISPLAY_MODULE STREQUAL on)
+	ADD_SOURCE(src/display DISPLAY_SRCS)
+	SET(SRCS ${SRCS} ${DISPLAY_SRCS})
+ENDIF()
 
 # usb client
-SET(SRCS ${SRCS}
-	src/usb/usb-common.c
-	src/usb/usb-client.c
-	src/usb/usb-client-event-sdk.c
-	src/usb/usb-client-config.c
-	src/usb/usb-client-set.c
-	src/usb/usb-client-control.c
-	src/usb/usb-client-dbus.c
-)
-IF(USE_MICRO_DD)
-SET(SRCS ${SRCS} src/usb/usb-client-mode-micro.c)
-ELSE(USE_MICRO_DD)
-SET(SRCS ${SRCS} src/usb/usb-client-mode.c)
-ENDIF(USE_MICRO_DD)
+IF(${USB_MODULE} STREQUAL on)
+	ADD_SOURCE(src/usb USB_SRCS)
+	SET(SRCS ${SRCS} ${USB_SRCS})
+ENDIF()
 
 # usb host
-IF(NOT USE_MICRO_DD)
-SET(SRCS ${SRCS}
-	src/usb/usb-common.c
-	src/usb/usb-host.c
-	src/usb/usb-host-dbus.c
-	src/usb/usb-host-storage.c
-	src/usb/usb-host-storage-vfat.c
-	src/usb/usb-host-storage-exfat.c
-	src/usb/usb-host-hid.c
-	src/usb/usb-host-camera.c
-	src/usb/usb-host-printer.c
-	src/usb/usb-host-naming.c
-)
-ENDIF(NOT USE_MICRO_DD)
-
-# powersaver mode
-SET(SRCS ${SRCS}
-	src/powersaver/powersaver.c
-)
-IF(USE_MICRO_DD)
-SET(SRCS ${SRCS}
-	src/powersaver/powersaver-micro.c
-)
-ENDIF(USE_MICRO_DD)
+IF(${USBHOST_MODULE} STREQUAL on)
+	ADD_SOURCE(src/usbhost USBHOST_SRCS)
+	SET(SRCS ${SRCS} ${USBHOST_SRCS})
+ENDIF()
 
 INCLUDE_DIRECTORIES(${CMAKE_CURRENT_SOURCE_DIR})
 INCLUDE_DIRECTORIES(${CMAKE_CURRENT_SOURCE_DIR}/src)
 INCLUDE_DIRECTORIES(${CMAKE_CURRENT_SOURCE_DIR}/src/deviced)
 
 SET(PKG_MODULES
-	libbuxton
 	ecore
-	edbus
 	eina
+	edbus
 	vconf
 	dlog
+	libudev
 	device-node
 	capi-base-common
-	journal
-	storage
-	sensor
-	tapi
+	gio-2.0
+	eventsystem
 )
+
+IF(DISPLAY_MODULE STREQUAL on)
+	SET(PKG_MODULES ${PKG_MODULES} libinput capi-system-sensor)
+ENDIF()
+IF(STORAGE_MODULE STREQUAL on)
+	SET(PKG_MODULES ${PKG_MODULES} storage)
+ENDIF()
+IF(TELEPHONY_MODULE STREQUAL on)
+	SET(PKG_MODULES ${PKG_MODULES} tapi)
+ENDIF()
+IF(TZIP_MODULE STREQUAL on)
+	SET(PKG_MODULES ${PKG_MODULES} minizip fuse)
+ENDIF()
 
 INCLUDE(FindPkgConfig)
 pkg_check_modules(pkgs REQUIRED ${PKG_MODULES})
@@ -347,7 +284,7 @@ ADD_DEFINITIONS("-DENABLE_KEY_FILTER")
 ADD_DEFINITIONS("-DENABLE_X_LCD_ONOFF")
 ADD_DEFINITIONS("-DENABLE_DEVICED_DLOG")
 ADD_DEFINITIONS("-DENABLE_LIBDEVICED_DLOG")
-ADD_DEFINITIONS("-DENABLE_PM_LOG")
+ADD_DEFINITIONS("-DPROFILE=\"${PROFILE}\"")
 IF(USE_ARM)
 	ADD_DEFINITIONS("-DTARGET")
 ELSEIF(USE_EMULATOR)
@@ -356,7 +293,7 @@ ENDIF()
 ADD_DEFINITIONS("-DDEBUG")
 
 ADD_EXECUTABLE(${PROJECT_NAME} ${SRCS})
-TARGET_LINK_LIBRARIES(${PROJECT_NAME} ${pkgs_LDFLAGS} "-ldl" "-lm" "-ludev" "-ledbus" "-lstorage" shared)
+TARGET_LINK_LIBRARIES(${PROJECT_NAME} ${pkgs_LDFLAGS} "-ldl" "-lm" shared)
 INSTALL(TARGETS ${PROJECT_NAME} DESTINATION bin)
 
 INSTALL(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/deviced/ DESTINATION include/${PROJECT_NAME}
@@ -364,68 +301,71 @@ INSTALL(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/deviced/ DESTINATION include/$
 		PATTERN "*_doc.h" EXCLUDE
 		PATTERN "*.h")
 
+IF(BATTERY_MODULE STREQUAL on)
+	INSTALL_CONF(src/battery battery)
+ENDIF()
+IF(BLOCK_MODULE STREQUAL on)
+	INSTALL_CONF(src/block block)
+	INSTALL_CONF(src/mmc mmc)
+	INSTALL(PROGRAMS ${CMAKE_CURRENT_SOURCE_DIR}/scripts/mmc-smack-label DESTINATION bin)
+ENDIF()
+IF(DISPLAY_MODULE STREQUAL on)
+	INSTALL_CONF(src/display display)
+ENDIF()
+IF(HAPTIC_MODULE STREQUAL on)
+	INSTALL_CONF(src/haptic haptic)
+ENDIF()
+IF(LED_MODULE STREQUAL on)
+	INSTALL_CONF(src/led led)
+ENDIF()
+IF(PASS_MODULE STREQUAL on)
+	INSTALL_CONF(src/pass pass)
+ENDIF()
+IF(PMQOS_MODULE STREQUAL on)
+	INSTALL_CONF(src/pmqos pmqos)
+ENDIF()
+IF(POWER_MODULE STREQUAL on)
+	INSTALL_CONF(src/power power)
+ENDIF()
+IF(STORAGE_MODULE STREQUAL on)
+	INSTALL_CONF(src/storage storage)
+ENDIF()
+
+# USB connection
+IF(${USB_MODULE} STREQUAL on)
+	INSTALL_CONF(src/usb usb-client-configuration)
+	INSTALL_CONF(src/usb usb-client-operation)
+
+	# USB (Manual setting)
+	IF(USE_ENGINEER_MODE)
+		INSTALL(PROGRAMS ${CMAKE_CURRENT_SOURCE_DIR}/scripts/direct_set_debug.sh  DESTINATION ${EXEC_PREFIX})
+		INSTALL(PROGRAMS ${CMAKE_CURRENT_SOURCE_DIR}/scripts/set_usb_debug.sh     DESTINATION ${EXEC_PREFIX})
+	ENDIF(USE_ENGINEER_MODE)
+ENDIF()
+
+IF(NOT PROFILE STREQUAL wearable)
+	INSTALL(PROGRAMS ${CMAKE_CURRENT_SOURCE_DIR}/scripts/movi_format.sh DESTINATION bin)
+ENDIF(NOT PROFILE STREQUAL wearable)
+
 CONFIGURE_FILE(${PROJECT_NAME}.pc.in ${PROJECT_NAME}.pc @ONLY)
 INSTALL(FILES ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}.pc DESTINATION lib/pkgconfig)
 
-IF(NOT USE_MICRO_DD)
-	INSTALL(FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/led/led.conf DESTINATION /etc/deviced)
-ENDIF(NOT USE_MICRO_DD)
-INSTALL(FILES ${CMAKE_CURRENT_SOURCE_DIR}/scripts/dump_pm.sh DESTINATION /opt/etc/dump.d/module.d)
+INSTALL(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/systemd/ DESTINATION lib/systemd/system
+		FILES_MATCHING
+		PATTERN "*.service"
+		PATTERN "*.socket"
+		PATTERN "sdb-prestart.*" EXCLUDE
+		PATTERN "org.tizen.*" EXCLUDE)
 
-IF(USE_EMULATOR AND USE_MICRO_DD)
-INSTALL(FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/display/display-emul-wearable.conf DESTINATION /etc/deviced RENAME display.conf)
-ELSEIF(USE_EMULATOR)
-INSTALL(FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/display/display-emul-mobile.conf DESTINATION /etc/deviced RENAME display.conf)
-ELSEIF(USE_MICRO_DD)
-INSTALL(FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/display/display-wearable.conf DESTINATION /etc/deviced RENAME display.conf)
-ELSE()
-INSTALL(FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/display/display-mobile.conf DESTINATION /etc/deviced RENAME display.conf)
-ENDIF()
-INSTALL(FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/mmc/mmc.conf DESTINATION /etc/deviced RENAME mmc.conf)
-INSTALL(FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/pmqos/pmqos.conf DESTINATION /etc/deviced RENAME pmqos.conf)
-
-INSTALL(FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/battery/battery.conf DESTINATION /etc/deviced RENAME battery.conf)
-
-INSTALL(FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/storage/storage.conf DESTINATION /etc/deviced RENAME storage.conf)
-
-IF(USE_MICRO_DD)
-INSTALL(FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/pass/pass-micro.conf DESTINATION /etc/deviced RENAME pass.conf)
-INSTALL(FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/haptic/haptic-micro.conf DESTINATION /etc/deviced RENAME haptic.conf)
-ELSE()
-INSTALL(FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/pass/pass.conf DESTINATION /etc/deviced RENAME pass.conf)
-INSTALL(FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/haptic/haptic-mobile.conf DESTINATION /etc/deviced RENAME haptic.conf)
-ENDIF(USE_MICRO_DD)
-
-INSTALL(PROGRAMS ${CMAKE_BINARY_DIR}/scripts/deviced-pre.sh DESTINATION bin)
 INSTALL(FILES ${CMAKE_SOURCE_DIR}/packaging/${PROJECT_NAME}.efl DESTINATION /etc/smack/accesses.d)
-IF(USE_MICRO_DD)
-INSTALL(FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/usb/usb-client-configuration-micro.conf  DESTINATION ${CONFDIR} RENAME usb-client-configuration.conf)
-ELSE(USE_MICRO_DD)
-INSTALL(FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/usb/usb-client-configuration.conf  DESTINATION ${CONFDIR})
-ENDIF(USE_MICRO_DD)
-INSTALL(FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/usb/usb-client-operation.conf  DESTINATION ${CONFDIR})
 
-IF(NOT USE_MICRO_DD)
-	INSTALL(FILES ${CMAKE_CURRENT_SOURCE_DIR}/scripts/movi_format.sh DESTINATION bin)
-	INSTALL(PROGRAMS ${CMAKE_CURRENT_SOURCE_DIR}/scripts/mmc-smack-label DESTINATION bin)
-ENDIF(NOT USE_MICRO_DD)
-
-# USB (data-router)
-INSTALL(FILES ${CMAKE_CURRENT_SOURCE_DIR}/scripts/start_dr.sh  DESTINATION ${EXEC_PREFIX})
-
-# USB (Manual setting)
-IF(USE_ENGINEER_MODE)
-INSTALL(FILES ${CMAKE_CURRENT_SOURCE_DIR}/scripts/direct_set_debug.sh  DESTINATION ${EXEC_PREFIX})
-INSTALL(FILES ${CMAKE_CURRENT_SOURCE_DIR}/scripts/set_usb_debug.sh     DESTINATION ${EXEC_PREFIX})
-ENDIF()
-
-ADD_SUBDIRECTORY(src)
+ADD_SUBDIRECTORY(src/shared)
 ADD_SUBDIRECTORY(src/libdeviced)
-IF(NOT USE_MICRO_DD)
-	ADD_SUBDIRECTORY(src/fsck-msdos)
-	ADD_SUBDIRECTORY(src/newfs-msdos)
-ENDIF(NOT USE_MICRO_DD)
 ADD_SUBDIRECTORY(src/devicectl)
 ADD_SUBDIRECTORY(src/auto-test)
+IF(BLOCK_MODULE STREQUAL on)
+	ADD_SUBDIRECTORY(src/fsck-msdos)
+	ADD_SUBDIRECTORY(src/newfs-msdos)
+ENDIF()
 
 ENDIF(BUILD_EXECUTABLE)

@@ -8,6 +8,7 @@
             <label name="deviced::power" />
             <label name="deviced::reboot" />
             <label name="deviced::usbhost" />
+            <label name="deviced::camera" />
         </provide>
         <request>
             <smack request="deviced::display" type="rwx" />
@@ -16,13 +17,12 @@
             <smack request="deviced::power" type="rwx" />
             <smack request="deviced::reboot" type="rwx" />
             <smack request="deviced::usbhost" type="rwx" />
+            <smack request="deviced::camera" type="rwx" />
         </request>
     </define>
     <assign>
-        <filesystem path="/etc/init.d/device-daemon" label="_" exec_label="none" />
-        <filesystem path="/etc/rc.d/init.d/device-daemon" label="_" exec_label="none" />
-        <filesystem path="/opt/etc/dump.d/module.d/dump_pm.sh" label="_" exec_label="none" />
-        <filesystem path="/usr/share/dbus-1/services/org.tizen.system.deviced-auto-test.service" label="_" exec_label="none" />
+        <filesystem path="/usr/share/dbus-1/system-services/org.tizen.system.deviced.service" label="_" exec_label="none" />
+        <filesystem path="/usr/share/dbus-1/system-services/org.tizen.system.deviced-auto-test.service" label="_" exec_label="none" />
         <dbus name="org.tizen.system.deviced" own="deviced" bus="system">
             <node name="/Org/Tizen/System/DeviceD/Display">
                 <interface name="org.tizen.system.deviced.display">
@@ -46,6 +46,9 @@
                         <annotation name="com.tizen.smack" value="deviced::display" />
                     </method>
                     <method name="SetBrightness">
+                        <annotation name="com.tizen.smack" value="deviced::display" />
+                    </method>
+                    <method name="AutoBrightnessChanged">
                         <annotation name="com.tizen.smack" value="deviced::display" />
                     </method>
                 </interface>
@@ -83,6 +86,9 @@
             </node>
             <node name="/Org/Tizen/System/DeviceD/Led">
                 <interface name="org.tizen.system.deviced.Led">
+                    <method name="GetMaxBrightnessForCamera">
+                        <annotation name="com.tizen.smack" value="deviced::camera" />
+                    </method>
                     <method name="GetMaxBrightness">
                         <annotation name="com.tizen.smack" value="deviced::led" />
                     </method>
@@ -101,6 +107,9 @@
                     <method name="SetIrCommand">
                         <annotation name="com.tizen.smack" value="deviced::led" />
                     </method>
+                    <signal name="ChangeFlashState">
+                        <annotation name="com.tizen.smack" value="deviced::led" />
+                    </signal>
                 </interface>
             </node>
             <node name="/Org/Tizen/System/DeviceD/Power">

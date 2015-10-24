@@ -227,7 +227,7 @@ out:
 static const struct edbus_method edbus_methods[] = {
 	{ "CprmInit",		NULL,	"i",	edbus_cprm_init},
 	{ "CprmTerminate",	NULL,	"i",	edbus_cprm_terminate},
-	{ "CprmSendcmd",	"iiuay","ayi",	edbus_cprm_sendcmd},
+	{ "CprmSendcmd",	"iiuay", "ayi",	edbus_cprm_sendcmd},
 	{ "CprmGetslotstat",	NULL,	"u",	edbus_cprm_getslotstat},
 	{ "CprmRetry",		NULL,	"i",	edbus_cprm_retry},
 };
@@ -236,13 +236,14 @@ static void cprm_init(void *data)
 {
 	int ret;
 
-	ret = register_edbus_method(DEVICED_PATH_MMC, edbus_methods, ARRAY_SIZE(edbus_methods));
+	ret = register_edbus_interface_and_method(DEVICED_PATH_MMC,
+			DEVICED_INTERFACE_MMC,
+			edbus_methods, ARRAY_SIZE(edbus_methods));
 	if (ret < 0)
-		_E("fail to init edbus method(%d)", ret);
+		_E("fail to init edbus interface and method(%d)", ret);
 }
 
 const struct device_ops cprm_device_ops = {
-	.priority = DEVICE_PRIORITY_NORMAL,
 	.name     = "cprm",
 	.init     = cprm_init,
 };

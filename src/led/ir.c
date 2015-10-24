@@ -59,13 +59,14 @@ static void ir_init(void *data)
 	int ret;
 
 	/* init dbus interface */
-	ret = register_edbus_method(DEVICED_PATH_LED, edbus_methods, ARRAY_SIZE(edbus_methods));
+	ret = register_edbus_interface_and_method(DEVICED_PATH_LED,
+			DEVICED_INTERFACE_LED,
+			edbus_methods, ARRAY_SIZE(edbus_methods));
 	if (ret < 0)
-		_E("fail to init edbus method(%d)", ret);
+		_E("fail to init edbus interfce and method(%d)", ret);
 }
 
 static const struct device_ops irled_device_ops = {
-	.priority = DEVICE_PRIORITY_NORMAL,
 	.name     = "irled",
 	.init     = ir_init,
 };

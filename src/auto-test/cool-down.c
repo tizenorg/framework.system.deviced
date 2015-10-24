@@ -74,7 +74,7 @@ static int cool_down(char *name, char *status)
 	if (!msg) {
 		_E("fail : %s %s %s %s",
 			DEVICED_BUS_NAME, DEVICED_PATH_SYSNOTI, DEVICED_INTERFACE_SYSNOTI,
-			METHOD_SET_DEVICE);
+			METHOD_COOL_DOWN_CHANGED);
 		return -EBADMSG;
 	}
 

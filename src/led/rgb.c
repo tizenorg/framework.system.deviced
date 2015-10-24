@@ -30,21 +30,20 @@
 #include "core/edbus-handler.h"
 #include "core/devices.h"
 #include "core/device-notifier.h"
-#include "core/device-handler.h"
+#include "battery/power-supply.h"
 #include "display/core.h"
 #include "conf.h"
-#include "power/power-handler.h"
 
 #define BOOT_ANIMATION_FINISHED		1
 
 #define LED_VALUE(high, low)		(((high)<<16)|((low)&0xFFFF))
 
 #define BG_COLOR		0x00000000
-#define GET_ALPHA(x)	(((x)>>24) & 0xFF)
+#define GET_ALPHA(x)	(((x) >> 24) & 0xFF)
 #define GET_RED(x)		(((x)>>16) & 0xFF)
-#define GET_GREEN(x)	(((x)>> 8) & 0xFF)
+#define GET_GREEN(x)	(((x) >> 8) & 0xFF)
 #define GET_BLUE(x)		((x) & 0xFF)
-#define COMBINE_RGB(r,g,b)	((((r) & 0xFF) << 16) | (((g) & 0xFF) << 8) | ((b) & 0xFF))
+#define COMBINE_RGB(r, g, b)	((((r) & 0xFF) << 16) | (((g) & 0xFF) << 8) | ((b) & 0xFF))
 
 #define SET_WAVE_BIT	(0x6 << 24)
 #define DUMPMODE_WAITING_TIME    600000
@@ -61,9 +60,9 @@ static bool lowbat_state;
 static bool full_state;
 static bool badbat_state;
 static bool ovp_state;
-static int rgb_blocked = false;
-static bool rgb_dumpmode = false;
-static Ecore_Timer *dumpmode_timer = NULL;
+static int rgb_blocked;
+static bool rgb_dumpmode;
+static Ecore_Timer *dumpmode_timer;
 static enum state_t lcd_state = S_NORMAL;
 static Ecore_Timer *reset_timer;
 
@@ -205,7 +204,7 @@ static int led_mode_to_device(struct led_mode *led)
 
 static Eina_Bool timer_reset_cb(void *data)
 {
-	struct led_mode *led = (struct led_mode*)data;
+	struct led_mode *led = (struct led_mode *)data;
 
 	if (!led)
 		return ECORE_CALLBACK_CANCEL;
@@ -258,7 +257,7 @@ static int led_display_changed_cb(void *data)
 
 static int led_charging_changed_cb(void *data)
 {
-	int v = (int)data;
+	int v = *(int *)data;
 
 	if (v == CHARGER_CHARGING)
 		charging_state = true;
@@ -315,7 +314,7 @@ static int led_battery_health_changed_cb(void *data)
 		led = find_led_data(LED_OFF);
 		led_mode_to_device(led);
 		if (lcd_state == S_LCDOFF)
-			led_display_changed_cb((void*)S_LCDOFF);
+			led_display_changed_cb((void *)S_LCDOFF);
 	}
 
 	return 0;
@@ -332,7 +331,7 @@ static int led_battery_ovp_changed_cb(void *data)
 	ovp_state = cur;
 
 	if (ovp_state == OVP_NORMAL && lcd_state == S_LCDOFF)
-		led_display_changed_cb((void*)S_LCDOFF);
+		led_display_changed_cb((void *)S_LCDOFF);
 
 	return 0;
 }
@@ -356,16 +355,17 @@ static void led_poweron_changed_cb(keynode_t *key, void *data)
 
 static int led_poweroff_changed_cb(void *data)
 {
-	int state = (int)data;
+	int state;
 	struct led_mode *led;
 
-	if (state == POWER_OFF_NONE ||
-		state == POWER_OFF_POPUP)
+	state = *(int *)data;
+
+	if (state == VCONFKEY_SYSMAN_POWER_OFF_NONE ||
+		state == VCONFKEY_SYSMAN_POWER_OFF_POPUP)
 		return 0;
 
 	led = find_led_data(LED_POWER_OFF);
 	led_mode_to_device(led);
-
 	unregister_notifier(DEVICE_NOTIFIER_POWEROFF, led_poweroff_changed_cb);
 	return 0;
 }
@@ -391,12 +391,6 @@ static void led_vconf_lowbat_cb(keynode_t *key, void *data)
 		led_mode(LED_LOW_BATTERY, lowbat_state);
 	else
 		led_mode(LED_LOW_BATTERY, false);
-}
-
-static void led_vconf_blocking_cb(keynode_t *key, void *data)
-{
-	rgb_blocked = vconf_keynode_get_bool(key);
-	_I("rgbled blocking mode %s", (rgb_blocked ? "started" : "stopped"));
 }
 
 static void led_vconf_psmode_cb(keynode_t *key, void *data)
@@ -527,7 +521,7 @@ static DBusMessage *edbus_set_mode(E_DBus_Object *obj, DBusMessage *msg)
 			led = find_led_data(LED_OFF);
 			led_mode_to_device(led);
 			/* update the led state */
-			led_display_changed_cb((void*)S_LCDOFF);
+			led_display_changed_cb((void *)S_LCDOFF);
 		}
 	}
 
@@ -625,9 +619,11 @@ static void rgb_init(void *data)
 	struct led_mode *led;
 
 	/* init dbus interface */
-	ret = register_edbus_method(DEVICED_PATH_LED, edbus_methods, ARRAY_SIZE(edbus_methods));
+	ret = register_edbus_interface_and_method(DEVICED_PATH_LED,
+			DEVICED_INTERFACE_LED,
+			edbus_methods, ARRAY_SIZE(edbus_methods));
 	if (ret < 0)
-		_E("fail to init edbus method(%d)", ret);
+		_E("fail to init edbus interface and method(%d)", ret);
 
 	/* get led mode data from xml */
 	get_led_data();
@@ -651,6 +647,7 @@ static void rgb_init(void *data)
 			led_poweron_changed_cb, NULL);
 
 next:
+
 	/* register notifier for each event */
 	register_notifier(DEVICE_NOTIFIER_LCD, led_display_changed_cb);
 	register_notifier(DEVICE_NOTIFIER_BATTERY_CHARGING, led_charging_changed_cb);
@@ -664,18 +661,11 @@ next:
 	vconf_get_bool(VCONFKEY_SETAPPL_LED_INDICATOR_CHARGING, &charging_key);
 	vconf_get_bool(VCONFKEY_SETAPPL_LED_INDICATOR_LOW_BATT, &lowbat_key);
 
-	/* initialize led indicator blocking value */
-	vconf_get_bool(VCONFKEY_SETAPPL_BLOCKINGMODE_LED_INDICATOR, &rgb_blocked);
-
 	/* register vconf callback */
 	vconf_notify_key_changed(VCONFKEY_SETAPPL_LED_INDICATOR_CHARGING,
 			led_vconf_charging_cb, NULL);
 	vconf_notify_key_changed(VCONFKEY_SETAPPL_LED_INDICATOR_LOW_BATT,
 			led_vconf_lowbat_cb, NULL);
-
-	/* register led indicator blocking vconf callback */
-	vconf_notify_key_changed(VCONFKEY_SETAPPL_BLOCKINGMODE_LED_INDICATOR,
-			led_vconf_blocking_cb, NULL);
 
 	/* check power saving state */
 	vconf_get_int(VCONFKEY_SETAPPL_PSMODE, &psmode);
@@ -687,7 +677,7 @@ next:
 
 	ret = device_get_property(DEVICE_TYPE_POWER, PROP_POWER_CHARGE_NOW, &ta_connected);
 	if (!ret && ta_connected)
-		led_charging_changed_cb((void*)ta_connected);
+		led_charging_changed_cb(&ta_connected);
 }
 
 static void rgb_exit(void *data)
@@ -699,10 +689,6 @@ static void rgb_exit(void *data)
 			led_vconf_charging_cb);
 	vconf_ignore_key_changed(VCONFKEY_SETAPPL_LED_INDICATOR_LOW_BATT,
 			led_vconf_lowbat_cb);
-
-	/* unregister led indicatore blocking vconf callback */
-	vconf_ignore_key_changed(VCONFKEY_SETAPPL_BLOCKINGMODE_LED_INDICATOR,
-			led_vconf_blocking_cb);
 
 	/* unregister power saving callback */
 	vconf_ignore_key_changed(VCONFKEY_SETAPPL_PSMODE, led_vconf_psmode_cb);
@@ -725,7 +711,6 @@ static void rgb_exit(void *data)
 }
 
 static const struct device_ops rgbled_device_ops = {
-	.priority = DEVICE_PRIORITY_NORMAL,
 	.name     = "rgbled",
 	.init     = rgb_init,
 	.exit     = rgb_exit,

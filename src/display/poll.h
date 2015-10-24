@@ -21,10 +21,6 @@
  * @file	poll.h
  * @brief	Power Manager input device poll implementation
  *
- * This file includes the input device poll implementation.
- * Default input devices are /dev/event0 and /dev/event1
- * User can use "PM_INPUT_DEV" for setting another input device poll in an environment file (/etc/profile).
- * (ex: PM_INPUT_DEV=/dev/event0:/dev/event1:/dev/event5 )
  */
 
 #ifndef __PM_POLL_H__
@@ -48,17 +44,19 @@ enum {
 	INTERNAL_LOCK_BASE = 100000,
 	INTERNAL_LOCK_ALPM,
 	INTERNAL_LOCK_BATTERY,
+	INTERNAL_LOCK_BATTERY_FULL,
 	INTERNAL_LOCK_BOOTING,
 	INTERNAL_LOCK_DUMPMODE,
 	INTERNAL_LOCK_HDMI,
 	INTERNAL_LOCK_ODE,
 	INTERNAL_LOCK_POPUP,
 	INTERNAL_LOCK_SOUNDDOCK,
-	INTERNAL_LOCK_TA,
+	INTERNAL_LOCK_STANDBY_MODE,
 	INTERNAL_LOCK_TIME,
 	INTERNAL_LOCK_USB,
 	INTERNAL_LOCK_POWEROFF,
 	INTERNAL_LOCK_COOL_DOWN,
+	INTERNAL_LOCK_LOWBAT,
 };
 
 #define SIGNAL_NAME_LCD_CONTROL		"lcdcontol"
@@ -104,25 +102,13 @@ typedef struct {
 	unsigned int timeout2;
 } PMMsg;
 
-typedef struct {
-	char *dev_path;
-	int fd;
-	Ecore_Fd_Handler *dev_fd;
-	int pre_install;
-} indev;
-
-Eina_List *indev_list;
-
 PMMsg recv_data;
-int (*g_pm_callback) (int, PMMsg *);
-
-extern int init_pm_poll(int (*pm_callback) (int, PMMsg *));
-extern int exit_pm_poll();
-extern int init_pm_poll_input(int (*pm_callback)(int , PMMsg * ), const char *path);
+int (*pm_callback) (int, PMMsg *);
 
 extern int pm_lock_internal(pid_t pid, int s_bits, int flag, int timeout);
 extern int pm_unlock_internal(pid_t pid, int s_bits, int flag);
 extern int pm_change_internal(pid_t pid, int s_bits);
+extern int pm_get_power_state(void);
 
 /**
  * @}

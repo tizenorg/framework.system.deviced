@@ -87,12 +87,17 @@
 #ifndef SEC_TO_MSEC
 #define SEC_TO_MSEC(x)		((x)*1000)
 #endif
+#ifndef MSEC_TO_USEC
+#define MSEC_TO_USEC(x)		((unsigned int)(x)*1000)
+#endif
 #ifndef NSEC_TO_MSEC
 #define NSEC_TO_MSEC(x)		((double)x/1000000)
 #endif
 #ifndef USEC_TO_MSEC
 #define USEC_TO_MSEC(x)		((double)x/1000)
 #endif
+
+#define NANO_SECOND_MULTIPLIER  1000000 /* 1ms = 1,000,000 nsec */
 
 #ifndef safe_free
 #define safe_free(x) safe_free_memory((void**)&(x))
@@ -127,15 +132,22 @@ static inline void safe_free_memory(void** mem)
 	}					\
 } while (0)
 
+#ifdef TIZEN_ENGINEER_MODE
+#define eng_mode()	1
+#else
+#define eng_mode()	0
+#endif
+
 FILE * open_proc_oom_score_adj_file(int pid, const char *mode);
 int get_exec_pid(const char *execpath);
 int get_cmdline_name(pid_t pid, char *cmdline, size_t cmdline_size);
 int is_vip(int pid);
 int run_child(int argc, const char *argv[]);
+int run_child_lowpri(int argc, const char *argv[]);
 int remove_dir(const char *path, int del_dir);
 int sys_get_int(char *fname, int *val);
 int sys_set_int(char *fname, int val);
-int terminate_process(char* partition, bool force);
+int terminate_process(const char *partition, bool force);
 int mount_check(const char* path);
 void print_time(const char *prefix);
 

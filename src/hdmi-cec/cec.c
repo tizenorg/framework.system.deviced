@@ -20,6 +20,7 @@
 #include <linux/input.h>
 #include <pthread.h>
 #include <poll.h>
+#include <time.h>
 
 #include "core/common.h"
 #include "core/list.h"
@@ -32,7 +33,7 @@
 
 #define CED_PATH		"/devices/soc/*.cec"
 
-struct cec_dev{
+struct cec_dev {
 	pthread_t cec_thread;
 	int		mCecFd;
 	int		mCecPaddr;
@@ -41,7 +42,7 @@ struct cec_dev{
 	int		mCecRoutPaddr;
 };
 
-static struct cec_dev *cec_device = NULL;
+static struct cec_dev *cec_device;
 
 void send_CEConeTouchPlay(struct cec_dev *pdev)
 {
@@ -49,6 +50,7 @@ void send_CEConeTouchPlay(struct cec_dev *pdev)
 	unsigned char buffer[4];
 	int laddr = pdev->mCecLaddr;
 	int paddr = pdev->mCecPaddr;
+	struct timespec time = { 0, 500 * NANO_SECOND_MULTIPLIER };
 
 	buffer[0] = 0x40;
 	buffer[1] = CEC_OPCODE_TEXT_VIEW_ON;
@@ -57,7 +59,7 @@ void send_CEConeTouchPlay(struct cec_dev *pdev)
 
 	if (CECSendMessage(buffer, size) != size)
 		_E("CECSendMessage() failed!!!");
-	usleep(500000);
+	nanosleep(&time, NULL);
 
 	buffer[0] = (laddr << 4) | CEC_MSG_BROADCAST;
 	buffer[1] = CEC_OPCODE_ACTIVE_SOURCE;
@@ -68,7 +70,7 @@ void send_CEConeTouchPlay(struct cec_dev *pdev)
 
 	if (CECSendMessage(buffer, size) != size)
 		_E("CECSendMessage() failed!!!");
-	usleep(500000);
+	nanosleep(&time, NULL);
 
 	buffer[0] = 0x40;
 	buffer[1] = CEC_OPCODE_IMAGE_VIEW_ON;
@@ -77,7 +79,7 @@ void send_CEConeTouchPlay(struct cec_dev *pdev)
 
 	if (CECSendMessage(buffer, size) != size)
 		_E("CECSendMessage() failed!!!");
-	usleep(500000);
+	nanosleep(&time, NULL);
 
 	buffer[0] = (laddr << 4) | CEC_MSG_BROADCAST;
 	buffer[1] = CEC_OPCODE_ACTIVE_SOURCE;
@@ -125,7 +127,7 @@ static void handle_cec(struct cec_dev *pdev)
 	}
 	opcode = buffer[1];
 
-	if (lsrc != CEC_MSG_BROADCAST && (opcode ==CEC_OPCODE_SET_STREAM_PATH)) {
+	if (lsrc != CEC_MSG_BROADCAST && (opcode == CEC_OPCODE_SET_STREAM_PATH)) {
 		Psrc = buffer[2] << 8 | buffer[3];
 		_I("Psrc = 0x%x, dev->Paddr= 0x%x", Psrc, pdev->mCecPaddr);
 		if (pdev->mCecPaddr != Psrc) {
@@ -181,7 +183,7 @@ static void handle_cec(struct cec_dev *pdev)
 
 	if (opcode == CEC_OPCODE_SET_STREAM_PATH)
 		ceconoff = 1;
-	size = CECProcessOpcode(buffer,pdev-> mCecLaddr, pdev->mCecPaddr,
+	size = CECProcessOpcode(buffer, pdev->mCecLaddr, pdev->mCecPaddr,
 	pdev->mCecRoutPaddr);
 
 	if (size > 0) {
@@ -195,9 +197,9 @@ static void handle_cec(struct cec_dev *pdev)
 
 static void *hwc_cec_thread(void *data)
 {
+	struct pollfd fds;
 	struct cec_dev *pdev =
 		(struct cec_dev *)data;
-	struct pollfd fds;
 
 	fds.fd = pdev->mCecFd;
 	fds.events = POLLIN;
@@ -213,7 +215,7 @@ static void *hwc_cec_thread(void *data)
 			} else if (err == -1) {
 				if (errno == EINTR)
 					break;
-				_E("error in cec thread: %s", strerror(errno));
+				_E("error in cec thread: %d", errno);
 			}
 		}
 	}
@@ -227,7 +229,7 @@ static int check_cec(void)
 	if (cec != -1)
 		goto out;
 
-	if(access("/dev/cec0", F_OK) == 0)
+	if (access("/dev/cec0", F_OK) == 0)
 		cec = 1;
 	cec = 0;
 out:
@@ -243,9 +245,9 @@ static void start_cec(struct cec_dev *pdev)
 		_E("there is no cec handle");
 		return;
 	}
-	pdev->mCecPaddr = 0x100B;//CEC_NOT_VALID_PHYSICAL_ADDRESS;
+	pdev->mCecPaddr = 0x100B;/* CEC_NOT_VALID_PHYSICAL_ADDRESS */
 
-	//get TV physical address
+	/* get TV physical address */
 	pdev->mCecLaddr = CECAllocLogicalAddress(pdev->mCecPaddr, CEC_DEVICE_PLAYER);
 	/* Request power state from TV */
 	buffer[0] = (pdev->mCecLaddr << 4);
@@ -276,9 +278,11 @@ static void open_cec(struct cec_dev *pdev)
 	if (pdev->mCecFd > 0) {
 		ret = pthread_create(&pdev->cec_thread, NULL, hwc_cec_thread, pdev);
 		if (ret) {
-			_E("failed to start cec thread: %s", strerror(ret));
+			_E("failed to start cec thread: %d", ret);
 			pdev->mCecFd = -1;
 			CECClose();
+			free(pdev);
+			pdev = NULL;
 		} else {
 			_I("run thread");
 			start_cec(pdev);
@@ -286,38 +290,29 @@ static void open_cec(struct cec_dev *pdev)
 			init_input_key_fd();
 		}
 
+	} else {
+		pdev->mCecFd = -1;
+		free(pdev);
+		pdev = NULL;
 	}
 }
 
 static void close_cec(struct cec_dev *pdev)
 {
-	CECClose();
-
-	if (!pdev)
+	if (!pdev) {
+		_E("there is no cec handle");
 		return;
-
+	}
+	CECClose();
 	_I("cec is %d", pdev->mCecFd);
 	pthread_kill(pdev->cec_thread, SIGTERM);
 	pthread_join(pdev->cec_thread, NULL);
 	pdev->mCecFd = -1;
 	free(pdev);
+	pdev = NULL;
 }
 
-static void init_cec(struct cec_dev *pdev)
-{
-	if (pdev) {
-		_I("already initialized");
-		return;
-	}
-	pdev = (struct cec_dev *)malloc(sizeof(*pdev));
-	if (!pdev) {
-		_E("there is no cec handle");
-		return;
-	}
-	memset(pdev, 0, sizeof(*pdev));	
-}
-
-static void cec_uevent_changed (struct udev_device *dev)
+static void cec_uevent_changed(struct udev_device *dev)
 {
 	const char *state = NULL;
 	const char *devpath = NULL;
@@ -331,8 +326,9 @@ static void cec_uevent_changed (struct udev_device *dev)
 	_I("%s %s", devpath, value);
 }
 
-const static struct uevent_handler cec_uevent_handler[] = {
-	{ "misc"       ,     cec_uevent_changed       ,    NULL    },
+static const struct uevent_handler cec_uevent_handler = {
+	.subsystem   = "misc",
+	.uevent_func = cec_uevent_changed,
 };
 
 static DBusMessage *dbus_get_state(E_DBus_Object *obj, DBusMessage *msg)
@@ -353,16 +349,17 @@ static const struct edbus_method edbus_methods[] = {
 
 static int cec_init_booting_done(void *data)
 {
-	int ret, i;
+	int ret;
 
-	for (i = 0 ; i < ARRAY_SIZE(cec_uevent_handler) ; i++) {
-		ret = register_uevent_control(&cec_uevent_handler[i]);
-		if (ret < 0)
-			_E("FAIL: reg_uevent_control()");
-	}
-	ret = register_edbus_method(DEVICED_PATH_HDMICEC, edbus_methods, ARRAY_SIZE(edbus_methods));
+	ret = register_udev_uevent_control(&cec_uevent_handler);
 	if (ret < 0)
-		_E("fail to init edbus method(%d)", ret);
+		_E("FAIL: reg_uevent_control()");
+
+	ret = register_edbus_interface_and_method(DEVICED_PATH_HDMICEC,
+			DEVICED_INTERFACE_HDMICEC,
+			edbus_methods, ARRAY_SIZE(edbus_methods));
+	if (ret < 0)
+		_E("fail to init edbus interface and method(%d)", ret);
 
 	return 0;
 }
@@ -376,11 +373,7 @@ static void hdmi_cec_init(void *data)
 
 static void hdmi_cec_exit(void *data)
 {
-	int i;
-
-	for (i = 0 ; i < ARRAY_SIZE(cec_uevent_handler) ; i++) {
-		unregister_uevent_control(&cec_uevent_handler[i]);
-	}
+	unregister_udev_uevent_control(&cec_uevent_handler);
 }
 
 static int hdmi_cec_execute(void *data)
@@ -401,7 +394,6 @@ static int hdmi_cec_execute(void *data)
 }
 
 static const struct device_ops cec_device_ops = {
-	.priority = DEVICE_PRIORITY_NORMAL,
 	.name     = "hdmi-cec",
 	.init     = hdmi_cec_init,
 	.exit     = hdmi_cec_exit,

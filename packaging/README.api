@@ -58,6 +58,7 @@ Hapic
 Led
 	org.tizen.system.deviced.Led.playcustom                     deviced::led
 	org.tizen.system.deviced.Led.stopcustom                     deviced::led
+	org.tizen.system.deviced.Led.GetBrightnessForCamera         deviced::camera
 	org.tizen.system.deviced.Led.GetBrightness                  deviced::led
 	org.tizen.system.deviced.Led.GetMaxBrightness               deviced::led
 	org.tizen.system.deviced.Led.SetBrightness                  deviced::led

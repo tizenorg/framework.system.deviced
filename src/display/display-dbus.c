@@ -27,6 +27,7 @@
 #include <stdbool.h>
 #include <Ecore.h>
 #include <device-node.h>
+#include <sensor.h>
 
 #include "core/log.h"
 #include "util.h"
@@ -37,10 +38,10 @@
 #include "dd-display.h"
 #include "display-actor.h"
 
-#define TELEPHONY_PATH			"/org/tizen/telephony/SAMSUNG_QMI"
-#define TELEPHONY_INTERFACE_SIM		"org.tizen.telephony.Sim"
-#define SIGNAL_SIM_STATUS		"Status"
-#define SIM_CARD_NOT_PRESENT		(0x01)
+#define TELEPHONY_PATH			"/org/tizen/telephony"
+#define TELEPHONY_INTERFACE_SIM		"org.tizen.telephony.Manager"
+#define SIGNAL_SIM_STATUS		"SimInserted"
+#define SIM_CARD_NOT_PRESENT		(0x0)
 
 #define VCONFKEY_LCD_BRIGHTNESS_INIT "db/private/deviced/lcd_brightness_init"
 
@@ -58,7 +59,7 @@
 
 static DBusMessage *edbus_start(E_DBus_Object *obj, DBusMessage *msg)
 {
-	static const struct device_ops *display_device_ops = NULL;
+	static const struct device_ops *display_device_ops;
 
 	if (!display_device_ops)
 		display_device_ops = find_device("display");
@@ -71,7 +72,7 @@ static DBusMessage *edbus_start(E_DBus_Object *obj, DBusMessage *msg)
 
 static DBusMessage *edbus_stop(E_DBus_Object *obj, DBusMessage *msg)
 {
-	static const struct device_ops *display_device_ops = NULL;
+	static const struct device_ops *display_device_ops;
 
 	if (!display_device_ops)
 		display_device_ops = find_device("display");
@@ -316,9 +317,6 @@ static DBusMessage *edbus_changestate(E_DBus_Object *obj, DBusMessage *msg)
 	}
 
 	ret = pm_change_internal(pid, state);
-
-	if (!ret && state == LCD_OFF)
-		update_lcdoff_source(VCONFKEY_PM_LCDOFF_BY_TIMEOUT);
 out:
 	reply = dbus_message_new_method_return(msg);
 	dbus_message_iter_init_append(reply, &iter);
@@ -426,9 +424,12 @@ static DBusMessage *edbus_setbrightness(E_DBus_Object *obj, DBusMessage *msg)
 		powersaver = SETTING_PSMODE_NORMAL;
 	}
 
-	if (powersaver == SETTING_PSMODE_WEARABLE) {
-		_D("brightness is changed in powersaver mode!");
-		backlight_ops.set_force_brightness(0);
+	if (powersaver == SETTING_PSMODE_WEARABLE ||
+	    powersaver == SETTING_PSMODE_EMERGENCY) {
+		_D("Powersaver mode! brightness can not be changed!");
+		ret = -EPERM;
+		goto error;
+
 	}
 
 	if (vconf_get_int(VCONFKEY_SETAPPL_BRIGHTNESS_AUTOMATIC_INT, &autobrt) != 0) {
@@ -437,8 +438,8 @@ static DBusMessage *edbus_setbrightness(E_DBus_Object *obj, DBusMessage *msg)
 	}
 
 	if (autobrt == SETTING_BRIGHTNESS_AUTOMATIC_ON) {
-		_D("auto_brightness state is ON, can not change the brightness value");
-		ret = 0;
+		_E("auto_brightness state is ON, can not change the brightness value");
+		ret = -EPERM;
 		goto error;
 	}
 
@@ -449,8 +450,7 @@ static DBusMessage *edbus_setbrightness(E_DBus_Object *obj, DBusMessage *msg)
 	if (vconf_set_int(VCONFKEY_SETAPPL_LCD_BRIGHTNESS, brt) != 0)
 		_E("Failed to set VCONFKEY_SETAPPL_LCD_BRIGHTNESS value");
 
-	if (vconf_set_int(VCONFKEY_PM_CURRENT_BRIGHTNESS, brt) != 0)
-		_E("Failed to set VCONFKEY_PM_CURRENT_BRIGHTNESS value");
+	backlight_ops.set_current_brightness(brt);
 
 	_I("set brightness %d, %d", brt, ret);
 
@@ -489,7 +489,8 @@ static DBusMessage *edbus_holdbrightness(E_DBus_Object *obj, DBusMessage *msg)
 		powersaver = SETTING_PSMODE_NORMAL;
 	}
 
-	if (powersaver == SETTING_PSMODE_WEARABLE) {
+	if (powersaver == SETTING_PSMODE_WEARABLE ||
+	    powersaver == SETTING_PSMODE_EMERGENCY) {
 		_D("Powersaver mode! brightness can not be changed!");
 		ret = -EPERM;
 		goto error;
@@ -500,7 +501,7 @@ static DBusMessage *edbus_holdbrightness(E_DBus_Object *obj, DBusMessage *msg)
 		autobrt = SETTING_BRIGHTNESS_AUTOMATIC_OFF;
 	}
 
-	vconf_set_int(VCONFKEY_PM_CUSTOM_BRIGHTNESS_STATUS, VCONFKEY_PM_CUSTOM_BRIGHTNESS_ON);
+	backlight_ops.set_custom_status(true);
 
 	cmd = DISP_CMD(PROP_DISPLAY_BRIGHTNESS, DEFAULT_DISPLAY);
 	ret = device_set_property(DEVICE_TYPE_DISPLAY, cmd, brt);
@@ -512,8 +513,7 @@ static DBusMessage *edbus_holdbrightness(E_DBus_Object *obj, DBusMessage *msg)
 		vconf_set_int(VCONFKEY_SETAPPL_BRIGHTNESS_AUTOMATIC_INT, SETTING_BRIGHTNESS_AUTOMATIC_PAUSE);
 	}
 
-	if (vconf_set_int(VCONFKEY_PM_CURRENT_BRIGHTNESS, brt) != 0)
-		_E("Failed to set VCONFKEY_PM_CURRENT_BRIGHTNESS value");
+	backlight_ops.set_current_brightness(brt);
 
 	_I("hold brightness %d, %d", brt, ret);
 
@@ -529,7 +529,7 @@ static DBusMessage *edbus_releasebrightness(E_DBus_Object *obj, DBusMessage *msg
 {
 	DBusMessageIter iter;
 	DBusMessage *reply;
-	int cmd, bat, charger, changed, setting, brt, autobrt, ret = 0;
+	int cmd, bat, charger, changed, setting, brt, autobrt, powersaver, ret = 0;
 
 	if (vconf_get_int(VCONFKEY_SYSMAN_BATTERY_STATUS_LOW, &bat) != 0) {
 		_E("Failed to get VCONFKEY_SYSMAN_BATTERY_STATUS_LOW value");
@@ -539,12 +539,6 @@ static DBusMessage *edbus_releasebrightness(E_DBus_Object *obj, DBusMessage *msg
 
 	if (vconf_get_int(VCONFKEY_SYSMAN_CHARGER_STATUS, &charger) != 0) {
 		_E("Failed to get VCONFKEY_SYSMAN_CHARGER_STATUS value");
-		ret = -EPERM;
-		goto error;
-	}
-
-	if (vconf_get_bool(VCONFKEY_PM_BRIGHTNESS_CHANGED_IN_LPM, &changed) != 0) {
-		_E("Failed to get VCONFKEY_PM_BRIGHTNESS_CHANGED_IN_LPM value");
 		ret = -EPERM;
 		goto error;
 	}
@@ -561,29 +555,39 @@ static DBusMessage *edbus_releasebrightness(E_DBus_Object *obj, DBusMessage *msg
 		goto error;
 	}
 
-	vconf_set_int(VCONFKEY_PM_CUSTOM_BRIGHTNESS_STATUS, VCONFKEY_PM_CUSTOM_BRIGHTNESS_OFF);
+	changed = pm_status_flag & BRTCH_FLAG;
+	backlight_ops.set_custom_status(false);
 
 	cmd = DISP_CMD(PROP_DISPLAY_BRIGHTNESS, DEFAULT_DISPLAY);
 	ret = device_get_property(DEVICE_TYPE_DISPLAY, cmd, &brt);
 	if (ret < 0)
 		brt = ret;
 
-	// check dim state
+	/* check dim state */
 	if (low_battery_state(bat) &&
 	    charger == VCONFKEY_SYSMAN_CHARGER_DISCONNECTED && !changed) {
 		_D("batt warning low : brightness is not changed!");
-		if (brt != 0) {
+		if (brt != 0)
 			device_set_property(DEVICE_TYPE_DISPLAY, PROP_DISPLAY_BRIGHTNESS, 0);
-		}
 		goto error;
 	}
 
 	if (autobrt == SETTING_BRIGHTNESS_AUTOMATIC_OFF) {
+		if (vconf_get_int(VCONFKEY_SETAPPL_PSMODE, &powersaver) != 0) {
+			_E("Failed to get VCONFKEY_SETAPPL_PSMODE value");
+			powersaver = SETTING_PSMODE_NORMAL;
+		}
+
+		if (powersaver == SETTING_PSMODE_WEARABLE ||
+		    powersaver == SETTING_PSMODE_EMERGENCY) {
+			_D("brightness is released in powersaver mode!");
+			ret = -EPERM;
+			goto error;
+		}
+
 		if (brt != setting) {
 			device_set_property(DEVICE_TYPE_DISPLAY, PROP_DISPLAY_BRIGHTNESS, setting);
-			if (vconf_set_int(VCONFKEY_PM_CURRENT_BRIGHTNESS, setting) != 0) {
-				_E("Failed to set VCONFKEY_PM_CURRENT_BRIGHTNESS value");
-			}
+			backlight_ops.set_current_brightness(setting);
 		}
 	} else if (autobrt == SETTING_BRIGHTNESS_AUTOMATIC_PAUSE) {
 		_D("Auto brightness will be enable");
@@ -919,11 +923,11 @@ static DBusMessage *edbus_setautobrightnessmin(E_DBus_Object *obj, DBusMessage *
 	const char *sender;
 
 	sender = dbus_message_get_sender(msg);
-        if (!sender) {
-                _E("invalid sender name!");
-                ret = -EINVAL;
+	if (!sender) {
+		_E("invalid sender name!");
+		ret = -EINVAL;
 		goto error;
-        }
+	}
 	if (!display_info.set_autobrightness_min) {
 		ret = -EIO;
 		goto error;
@@ -938,8 +942,8 @@ static DBusMessage *edbus_setautobrightnessmin(E_DBus_Object *obj, DBusMessage *
 		goto error;
 	}
 	if (display_info.reset_autobrightness_min) {
-		register_edbus_watch(msg, WATCH_DISPLAY_AUTOBRIGHTNESS_MIN,
-		    display_info.reset_autobrightness_min);
+		register_edbus_watch(sender,
+		    display_info.reset_autobrightness_min, NULL);
 		_I("set autobrightness min %d by %d", val, pid);
 	}
 error:
@@ -974,8 +978,8 @@ static DBusMessage *edbus_setlcdtimeout(E_DBus_Object *obj, DBusMessage *msg)
 	if (ret) {
 		_W("fail to set lcd timeout %d by %d", ret, pid);
 	} else {
-		register_edbus_watch(msg, WATCH_DISPLAY_LCD_TIMEOUT,
-		    reset_lcd_timeout);
+		register_edbus_watch(sender,
+		    reset_lcd_timeout, NULL);
 		_I("set lcd timeout on %d, dim %d, holdblock %d by %d",
 		    on, dim, holdkey_block, pid);
 	}
@@ -1034,14 +1038,18 @@ static DBusMessage *edbus_dumpmode(E_DBus_Object *obj, DBusMessage *msg)
 		goto error;
 	}
 
-	if (!strcmp(on, "on"))
+	if (!strcmp(on, "on")) {
 		pm_lock_internal(INTERNAL_LOCK_DUMPMODE, LCD_OFF,
 		    STAY_CUR_STATE, DUMP_MODE_WATING_TIME);
-	else if (!strcmp(on, "off"))
+	} else if (!strcmp(on, "off")) {
 		pm_unlock_internal(INTERNAL_LOCK_DUMPMODE, LCD_OFF,
 		    PM_SLEEP_MARGIN);
-	else
+		backlight_ops.blink(0);
+	} else if (!strcmp(on, "blink")) {
+		backlight_ops.blink(500);
+	} else {
 		ret = -EINVAL;
+	}
 
 error:
 	reply = dbus_message_new_method_return(msg);
@@ -1053,7 +1061,7 @@ error:
 
 static DBusMessage *edbus_savelog(E_DBus_Object *obj, DBusMessage *msg)
 {
-	save_display_log();
+	save_display_log(NULL);
 	return dbus_message_new_method_return(msg);
 }
 
@@ -1209,6 +1217,118 @@ error:
 	return reply;
 }
 
+static DBusMessage *edbus_autobrightnesschanged(E_DBus_Object *obj, DBusMessage *msg)
+{
+	DBusMessageIter iter;
+	DBusMessage *reply;
+	int ret = 0;
+	int level;
+
+	ret = dbus_message_get_args(msg, NULL, DBUS_TYPE_INT32, &level,
+		    DBUS_TYPE_INVALID);
+
+	if (!ret) {
+		_E("fail to get level %d", ret);
+		ret = -EINVAL;
+		goto error;
+	}
+
+	if (display_info.set_brightness_level)
+		display_info.set_brightness_level(level);
+
+error:
+	reply = dbus_message_new_method_return(msg);
+	dbus_message_iter_init_append(reply, &iter);
+	dbus_message_iter_append_basic(&iter, DBUS_TYPE_INT32, &ret);
+
+	return reply;
+}
+
+static void set_lcd_timeout_by_touch(const char *sender, void *data)
+{
+	if (!sender)
+		return;
+
+	_I("set capability!");
+
+	display_set_caps(DISPLAY_ACTOR_TOUCH_KEY,
+			DISPLAY_CAPA_UPDATE_LCD_TIMEOUT);
+
+}
+
+static DBusMessage *edbus_updatelcdtimeoutbytouch(E_DBus_Object *obj, DBusMessage *msg)
+{
+	DBusMessageIter iter;
+	DBusMessage *reply;
+	const char *sender;
+	int ret = 0;
+	int state;
+
+	sender = dbus_message_get_sender(msg);
+	if (!sender) {
+		_E("invalid sender name");
+		ret = -EINVAL;
+		goto error;
+	}
+
+	ret = dbus_message_get_args(msg, NULL, DBUS_TYPE_INT32, &state,
+		    DBUS_TYPE_INVALID);
+
+	if (!ret) {
+		_E("fail to get state %d", ret);
+		ret = -EINVAL;
+		goto error;
+	}
+
+	if (state == true) {
+		ret = display_set_caps(DISPLAY_ACTOR_TOUCH_KEY,
+		    DISPLAY_CAPA_UPDATE_LCD_TIMEOUT);
+	} else if (state == false) {
+		ret = display_reset_caps(DISPLAY_ACTOR_TOUCH_KEY,
+		    DISPLAY_CAPA_UPDATE_LCD_TIMEOUT);
+		register_edbus_watch(sender, set_lcd_timeout_by_touch, NULL);
+	} else {
+		ret = -EINVAL;
+	}
+
+error:
+	reply = dbus_message_new_method_return(msg);
+	dbus_message_iter_init_append(reply, &iter);
+	dbus_message_iter_append_basic(&iter, DBUS_TYPE_INT32, &ret);
+
+	return reply;
+}
+
+static DBusMessage *edbus_getcustombrightness(E_DBus_Object *obj, DBusMessage *msg)
+{
+	DBusMessageIter iter;
+	DBusMessage *reply;
+	int status = 0;
+
+	status = backlight_ops.get_custom_status();
+
+	reply = dbus_message_new_method_return(msg);
+	dbus_message_iter_init_append(reply, &iter);
+	dbus_message_iter_append_basic(&iter, DBUS_TYPE_INT32, &status);
+
+	return reply;
+}
+
+static DBusMessage *edbus_getcurrentbrightness(E_DBus_Object *obj, DBusMessage *msg)
+{
+	DBusMessageIter iter;
+	DBusMessage *reply;
+	int brightness = 0;
+
+	brightness = backlight_ops.get_current_brightness();
+
+	reply = dbus_message_new_method_return(msg);
+	dbus_message_iter_init_append(reply, &iter);
+	dbus_message_iter_append_basic(&iter, DBUS_TYPE_INT32, &brightness);
+
+	return reply;
+}
+
 static const struct edbus_method edbus_methods[] = {
 	{ "start",           NULL,  NULL, edbus_start },
 	{ "stop",            NULL,  NULL, edbus_stop },
@@ -1226,7 +1346,7 @@ static const struct edbus_method edbus_methods[] = {
 	{ "setlcdtimeout",  "iii",   "i", edbus_setlcdtimeout },
 	{ "LockScreenBgOn",   "s",   "i", edbus_lockscreenbgon },
 	{ "GetDisplayCount", NULL,   "i", edbus_getdisplaycount },
-	{ "GetMaxBrightness",NULL,   "i", edbus_getmaxbrightness },
+	{ "GetMaxBrightness", NULL,   "i", edbus_getmaxbrightness },
 	{ "SetMaxBrightness", "i",   "i", edbus_setmaxbrightness },
 	{ "GetBrightness",   NULL,   "i", edbus_getbrightness },
 	{ "SetBrightness",    "i",   "i", edbus_setbrightness },
@@ -1242,15 +1362,19 @@ static const struct edbus_method edbus_methods[] = {
 	{ "SetColorBlind", "uttt",   "i", edbus_setcolorblind },
 	{ "GetHBM",          NULL,   "i", edbus_gethbm },
 	{ "SetHBM",           "i",   "i", edbus_sethbm },
-	{ "SetHBMTimeout"   ,"ii",   "i", edbus_sethbm_timeout },
+	{ "SetHBMTimeout",   "ii",   "i", edbus_sethbm_timeout },
 	{ "Dumpmode",         "s",   "i", edbus_dumpmode },
 	{ "SaveLog",         NULL,  NULL, edbus_savelog },
 	{ "PowerKeyIgnore",   "i",  NULL, edbus_powerkeyignore },
 	{ "PowerKeyLCDOff",  NULL,   "i", edbus_powerkeylcdoff },
 	{ "CustomLCDOn",      "i",   "i", edbus_customlcdon },
-	{ "StayTouchScreenOff","i",  "i", edbus_staytouchscreenoff },
+	{ "StayTouchScreenOff", "i",  "i", edbus_staytouchscreenoff },
 	{ "LCDPanelOffMode",  "i",   "i", edbus_lcdpaneloffmode },
 	{ "ActorControl",   "sii",   "i", edbus_actorcontrol },
+	{ "AutoBrightnessChanged",   "i",   "i", edbus_autobrightnesschanged },
+	{ "UpdateLCDTimeoutByTouch", "i",   "i", edbus_updatelcdtimeoutbytouch },
+	{ "CustomBrightness", NULL,   "i", edbus_getcustombrightness },
+	{ "CurrentBrightness", NULL,  "i", edbus_getcurrentbrightness },
 	/* Add methods here */
 };
 
@@ -1258,12 +1382,7 @@ static void sim_signal_handler(void *data, DBusMessage *msg)
 {
 	DBusError err;
 	int ret, val;
-	static int state = false;
-
-	if (!find_display_feature("auto-brightness")) {
-		_D("auto brightness is not supported!");
-		return;
-	}
+	static int state;
 
 	if (state)
 		return;
@@ -1271,7 +1390,7 @@ static void sim_signal_handler(void *data, DBusMessage *msg)
 	ret = dbus_message_is_signal(msg, TELEPHONY_INTERFACE_SIM,
 	    SIGNAL_SIM_STATUS);
 	if (!ret) {
-		_E("there is no power off popup signal");
+		_E("there is no sim status signal");
 		return;
 	}
 
@@ -1289,13 +1408,13 @@ static void sim_signal_handler(void *data, DBusMessage *msg)
 	}
 
 	if (val != SIM_CARD_NOT_PRESENT) {
-		/* change setting : autobrightness on */
 		state = true;
 		vconf_set_bool(VCONFKEY_LCD_BRIGHTNESS_INIT, state);
-		vconf_set_int(VCONFKEY_SETAPPL_BRIGHTNESS_AUTOMATIC_INT,
-		    SETTING_BRIGHTNESS_AUTOMATIC_ON);
 		vconf_set_int(VCONFKEY_SETAPPL_LCD_BRIGHTNESS,
-		    PM_DEFAULT_BRIGHTNESS);
+		    display_conf.default_brightness);
+		backlight_ops.set_default_brt(
+		    display_conf.default_brightness);
+		backlight_ops.update();
 		_I("SIM card is inserted at first!");
 	}
 }
@@ -1333,42 +1452,6 @@ static void homescreen_signal_handler(void *data, DBusMessage *msg)
 	}
 }
 
-static void extreme_signal_handler(void *data, DBusMessage *msg)
-{
-	int ret;
-
-	ret = dbus_message_is_signal(msg, POPUP_INTERFACE_LOWBAT,
-	    SIGNAL_EXTREME);
-	if (!ret) {
-		_E("there is no extreme signal");
-		return;
-	}
-
-	pm_status_flag &= ~BRTCH_FLAG;
-	if (hbm_get_state != NULL && hbm_get_state() == true)
-		hbm_set_state_with_timeout(false, 0);
-	backlight_ops.update();
-	_D("extreme mode : enter dim state!");
-	if (vconf_set_int(VCONFKEY_PM_KEY_IGNORE, TRUE) != 0)
-		_E("failed to set vconf status");
-}
-
-static void not_extreme_signal_handler(void *data, DBusMessage *msg)
-{
-	int ret;
-
-	ret = dbus_message_is_signal(msg, POPUP_INTERFACE_LOWBAT,
-	    SIGNAL_NOTEXTREME);
-	if (!ret) {
-		_E("there is no extreme signal");
-		return;
-	}
-
-	_D("release extreme mode");
-	if (vconf_set_int(VCONFKEY_PM_KEY_IGNORE, FALSE) != 0)
-		_E("failed to set vconf status");
-}
-
 /*
  * Default capability
  * api      := LCDON | LCDOFF | BRIGHTNESS
@@ -1399,12 +1482,7 @@ int init_pm_dbus(void)
 		_E("Failed to register edbus method! %d", ret);
 		return ret;
 	}
-/*
- * Auto-brightness feature has been implemented in wearable-device.
- * But UX is not determined, then Block sim-check-logic temporary.
- * This logic'll be re-enabled when UX concept related to sim is confirmed.
- */
-/*
+
 	ret = register_edbus_signal_handler(TELEPHONY_PATH,
 		    TELEPHONY_INTERFACE_SIM, SIGNAL_SIM_STATUS,
 		    sim_signal_handler);
@@ -1412,7 +1490,7 @@ int init_pm_dbus(void)
 		_E("Failed to register signal handler! %d", ret);
 		return ret;
 	}
-*/
+
 	ret = register_edbus_signal_handler(DEVICED_OBJECT_PATH,
 		    DEVICED_INTERFACE_NAME, SIGNAL_HOMESCREEN,
 		    homescreen_signal_handler);
@@ -1421,20 +1499,6 @@ int init_pm_dbus(void)
 		return ret;
 	}
 
-	ret = register_edbus_signal_handler(POPUP_PATH_LOWBAT,
-		    POPUP_INTERFACE_LOWBAT, SIGNAL_EXTREME,
-		    extreme_signal_handler);
-	if (ret < 0 && ret != -EEXIST) {
-		_E("Failed to register signal handler! %d", ret);
-		return ret;
-	}
-	ret = register_edbus_signal_handler(POPUP_PATH_LOWBAT,
-		    POPUP_INTERFACE_LOWBAT, SIGNAL_NOTEXTREME,
-		    not_extreme_signal_handler);
-	if (ret < 0 && ret != -EEXIST) {
-		_E("Failed to register signal handler! %d", ret);
-		return ret;
-	}
 	return 0;
 }
 

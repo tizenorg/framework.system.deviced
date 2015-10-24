@@ -31,10 +31,8 @@
 
 static int deviced_control_common(int device, bool enable)
 {
-	DBusError err;
-	DBusMessage *msg;
 	char *pa[5];
-	int ret, val;
+	int ret;
 	char buf_pid[6];
 	char buf_dev[3];
 	char buf_enable[2];
@@ -49,33 +47,18 @@ static int deviced_control_common(int device, bool enable)
 	pa[3] = buf_dev;
 	pa[4] = buf_enable;
 
-	msg = dbus_method_sync_with_reply(DEVICED_BUS_NAME,
+	ret = dbus_method_sync(DEVICED_BUS_NAME,
 			DEVICED_PATH_SYSNOTI, DEVICED_INTERFACE_SYSNOTI,
 			pa[0], "sisss", pa);
-	if (!msg)
-		return -EBADMSG;
 
-	dbus_error_init(&err);
-
-	ret = dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &val, DBUS_TYPE_INVALID);
-	if (!ret) {
-		_E("no message : [%s:%s]", err.name, err.message);
-		val = -EBADMSG;
-	}
-
-	dbus_message_unref(msg);
-	dbus_error_free(&err);
-
-	_D("%s-%s : %d", DEVICED_INTERFACE_SYSNOTI, pa[0], val);
-	return val;
+	_D("%s-%s : %d", DEVICED_INTERFACE_SYSNOTI, pa[0], ret);
+	return ret;
 }
 
 static int deviced_get_control(int device, void *data)
 {
-	DBusError err;
-	DBusMessage *msg;
 	char *pa[4];
-	int ret, val;
+	int ret;
 	char buf_pid[6];
 	char buf_dev[3];
 
@@ -87,25 +70,12 @@ static int deviced_get_control(int device, void *data)
 	pa[2] = buf_pid;
 	pa[3] = buf_dev;
 
-	msg = dbus_method_sync_with_reply(DEVICED_BUS_NAME,
+	ret = dbus_method_sync(DEVICED_BUS_NAME,
 			DEVICED_PATH_SYSNOTI, DEVICED_INTERFACE_SYSNOTI,
 			pa[0], "siss", pa);
-	if (!msg)
-		return -EBADMSG;
 
-	dbus_error_init(&err);
-
-	ret = dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &val, DBUS_TYPE_INVALID);
-	if (!ret) {
-		_E("no message : [%s:%s]", err.name, err.message);
-		val = -EBADMSG;
-	}
-
-	dbus_message_unref(msg);
-	dbus_error_free(&err);
-
-	_D("%s-%s : %d", DEVICED_INTERFACE_SYSNOTI, pa[0], val);
-	return val;
+	_D("%s-%s : %d", DEVICED_INTERFACE_SYSNOTI, pa[0], ret);
+	return ret;
 }
 
 

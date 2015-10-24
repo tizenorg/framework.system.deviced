@@ -85,8 +85,6 @@ static int get_control_handler(int argc, char **argv)
 	int i;
 	int pid;
 	int device;
-	bool enable;
-	int ret;
 	const struct device_ops *dev_ops = NULL;
 
 	_I("argc : %d", argc);
@@ -222,7 +220,6 @@ static void control_init(void *data)
 }
 
 static const struct device_ops control_device_ops = {
-	.priority = DEVICE_PRIORITY_NORMAL,
 	.name     = "control",
 	.init     = control_init,
 };

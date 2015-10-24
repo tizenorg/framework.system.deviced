@@ -16,7 +16,13 @@
  * limitations under the License.
  */
 #include "test.h"
+#define DD_BUS_NAME       "org.tizen.system.deviced"
+#define DD_OBJECT_PATH    "/Org/Tizen/System/DeviceD/Power"
+#define DD_INTERFACE_NAME "org.tizen.system.deviced.power"
+#define DD_POWEROFF_METHOD_NAME	"poweroff"
+#define DD_REBOOT_METHOD_NAME	"reboot"
 
+#define DBUS_REPLY_TIMEOUT (120 * 1000)
 #define EDBUS_INIT_RETRY_COUNT 5
 static int edbus_init_val;
 static DBusConnection *conn;
@@ -25,7 +31,7 @@ static E_DBus_Connection *edbus_conn;
 static const struct boot_control_type {
 	char *name;
 	char *status;
-} boot_control_types [] = {
+} boot_control_types[] = {
 	{"poweroffpopup",	"pwroff-popup"},
 	{"poweroffpopup",	"reboot"},
 	{"poweroffpopup",	"reboot-recovery"},
@@ -162,12 +168,119 @@ static void boot_exit(void *data)
 {
 }
 
+static int dd_append_variant(DBusMessageIter *iter, const char *sig, char *param[])
+{
+	char *ch;
+	int i;
+	int int_type;
+	uint64_t int64_type;
+
+	if (!sig || !param)
+		return 0;
+
+	for (ch = (char *)sig, i = 0; *ch != '\0'; ++i, ++ch) {
+		switch (*ch) {
+		case 'i':
+			int_type = atoi(param[i]);
+			dbus_message_iter_append_basic(iter, DBUS_TYPE_INT32, &int_type);
+			break;
+		case 'u':
+			int_type = atoi(param[i]);
+			dbus_message_iter_append_basic(iter, DBUS_TYPE_UINT32, &int_type);
+			break;
+		case 't':
+			int64_type = atoi(param[i]);
+			dbus_message_iter_append_basic(iter, DBUS_TYPE_UINT64, &int64_type);
+			break;
+		case 's':
+			dbus_message_iter_append_basic(iter, DBUS_TYPE_STRING, &param[i]);
+			break;
+		default:
+			return -EINVAL;
+		}
+	}
+
+	return 0;
+}
+
+static int dd_dbus_method_sync(const char *dest, const char *path,
+		const char *interface, const char *method,
+		const char *sig, char *param[])
+{
+	DBusConnection *conn;
+	DBusMessage *msg;
+	DBusMessageIter iter;
+	DBusMessage *reply;
+	DBusError err;
+	int r, ret;
+
+	conn = dbus_bus_get(DBUS_BUS_SYSTEM, NULL);
+	if (!conn)
+		return -EPERM;
+
+	msg = dbus_message_new_method_call(dest, path, interface, method);
+	if (!msg)
+		return -1;
+
+	dbus_message_iter_init_append(msg, &iter);
+	r = dd_append_variant(&iter, sig, param);
+	if (r < 0) {
+		dbus_message_unref(msg);
+		return -1;
+	}
+
+	dbus_error_init(&err);
+
+	reply = dbus_connection_send_with_reply_and_block(conn, msg, DBUS_REPLY_TIMEOUT, &err);
+	dbus_message_unref(msg);
+	if (!reply) {
+		dbus_error_free(&err);
+		return -1;
+	}
+
+	r = dbus_message_get_args(reply, &err, DBUS_TYPE_INT32, &ret, DBUS_TYPE_INVALID);
+	dbus_message_unref(reply);
+	if (!r) {
+		dbus_error_free(&err);
+		return -1;
+	}
+
+	return ret;
+}
+
+static int request_power_off(void)
+{
+	char *params[2];
+
+	_D("test");
+	params[0] = DD_POWEROFF_METHOD_NAME;
+	params[1] = "0";
+	return dd_dbus_method_sync(DD_BUS_NAME, DD_OBJECT_PATH,
+			DD_INTERFACE_NAME, DD_POWEROFF_METHOD_NAME, "si", params);
+}
+
+static int request_reboot(void)
+{
+	char *params[2];
+
+	_D("test");
+	params[0] = DD_REBOOT_METHOD_NAME;
+	params[1] = "0";
+	return dd_dbus_method_sync(DD_BUS_NAME, DD_OBJECT_PATH,
+			DD_INTERFACE_NAME, DD_REBOOT_METHOD_NAME, "si", params);
+}
+
+
 static int boot_unit(int argc, char **argv)
 {
 	int status;
 
 	if (argv[1] == NULL)
 		return -EINVAL;
+	if (strcmp("off", argv[2]) == 0)
+		request_power_off();
+	else if (strcmp("reboot", argv[2]) == 0)
+		request_reboot();
 	if (argc < 3)
 		return -EAGAIN;
 	unit(argv[argc-2], argv[argc-1]);

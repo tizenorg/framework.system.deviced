@@ -43,14 +43,14 @@ static struct pass_policy policy;
 /******************************************************
  *                PASS D-Bus interface                *
  ******************************************************/
-static DBusMessage* e_dbus_start_cb(E_DBus_Object *obj, DBusMessage* msg)
+static DBusMessage *e_dbus_start_cb(E_DBus_Object *obj, DBusMessage *msg)
 {
 	if (policy.governor)
 		policy.governor->update(&policy, PASS_GOV_START);
 	return dbus_message_new_method_return(msg);
 }
 
-static DBusMessage* e_dbus_stop_cb(E_DBus_Object *obj, DBusMessage* msg)
+static DBusMessage *e_dbus_stop_cb(E_DBus_Object *obj, DBusMessage *msg)
 {
 	if (policy.governor)
 		policy.governor->update(&policy, PASS_GOV_STOP);
@@ -58,8 +58,8 @@ static DBusMessage* e_dbus_stop_cb(E_DBus_Object *obj, DBusMessage* msg)
 }
 
 static const struct edbus_method edbus_methods[] = {
-        { "start",           NULL,  NULL, e_dbus_start_cb },
-        { "stop",            NULL,  NULL, e_dbus_stop_cb },
+	{"start",	NULL,	NULL,	e_dbus_start_cb},
+	{"stop",	NULL,	NULL,	e_dbus_stop_cb},
 };
 
 /******************************************************
@@ -92,8 +92,9 @@ static void pass_init(void *data)
 	 * Initialzie D-Bus interface of PASS. User can be able to
 	 * turn on/off PASS through D-Bus interface.
 	 */
-	ret = register_edbus_method(DEVICED_PATH_PASS, edbus_methods,
-				    ARRAY_SIZE(edbus_methods));
+	ret = register_edbus_interface_and_method(DEVICED_PATH_PASS,
+			DEVICED_INTERFACE_PASS,
+			edbus_methods, ARRAY_SIZE(edbus_methods));
 	if (ret < 0) {
 		_I("cannot initialize PASS D-Bus (%d)", ret);
 		return;
@@ -145,8 +146,8 @@ static void pass_init(void *data)
 	policy.cpufreq.num_nr_cpus = max_cpu;
 
 	/* Allocate memory according to the number of data and cpu */
-	policy.pass_cpu_stats = malloc(sizeof(struct pass_cpu_stats)
-						* policy.num_pass_cpu_stats);
+	policy.pass_cpu_stats = malloc(
+			sizeof(struct pass_cpu_stats) * policy.num_pass_cpu_stats);
 
 	for (i = 0; i < policy.num_pass_cpu_stats; i++) {
 		policy.pass_cpu_stats[i].load =
@@ -170,8 +171,8 @@ static void pass_init(void *data)
 	if (!policy.hotplug) {
 		_E("cannot get the instance of PASS hotplug");
 	} else {
-		policy.hotplug->sequence = malloc(sizeof(int)
-						  * policy.cpufreq.num_nr_cpus);
+		policy.hotplug->sequence = malloc(
+				sizeof(int) * policy.cpufreq.num_nr_cpus);
 		for (i = 0; i < policy.cpufreq.num_nr_cpus; i++)
 			policy.hotplug->sequence[i] = i;
 	}
@@ -219,7 +220,6 @@ static void pass_exit(void *data)
 }
 
 static const struct device_ops pass_device_ops = {
-	.priority = DEVICE_PRIORITY_NORMAL,
 	.name     = "pass",
 	.init     = pass_init,
 	.exit     = pass_exit,

@@ -41,8 +41,8 @@ struct sleep_type {
 static struct sleep_type monitor = {
 	.sleep_status = -1,
 };
-static time_t old = 0;
-static time_t diff = 0;
+static time_t old;
+static time_t diff;
 
 static void sleep_changed(int status)
 {
@@ -68,7 +68,12 @@ static void check_sleep(void)
 
 static int display_changed(void *data)
 {
-	enum state_t state = (enum state_t)data;
+	enum state_t state;
+
+	if (!data)
+		return 0;
+
+	state = *(int *)data;
 
 	if (state == S_LCDOFF || state == S_SLEEP)
 		goto out;
@@ -106,7 +111,6 @@ static int sleep_execute(void *data)
 }
 
 static const struct device_ops sleep_device_ops = {
-	.priority = DEVICE_PRIORITY_NORMAL,
 	.name     = DEVICE_SLEEP_OPS,
 	.init     = sleep_init,
 	.exit     = sleep_exit,

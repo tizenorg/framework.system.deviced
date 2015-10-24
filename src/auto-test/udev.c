@@ -20,7 +20,7 @@
 static const struct device_change_type {
 	char *name;
 	char *status;
-} device_change_types [] = {
+} device_change_types[] = {
 	{"udev",		"start"},
 	{"udev",		"stop"},
 };
@@ -32,17 +32,17 @@ static int udev(int index)
 	int ret, val;
 	char *param[3];
 
-	param[0] = UDEV;
+	param[0] = "udev";
 	param[1] = "1";
 	param[2] = device_change_types[index].status;
 
 	msg = dbus_method_sync_with_reply(DEVICED_BUS_NAME,
 			DEVICED_PATH_SYSNOTI, DEVICED_INTERFACE_SYSNOTI,
-			UDEV, "sis", param);
+			"udev", "sis", param);
 	if (!msg) {
 		_E("fail : %s %s %s %s",
 			DEVICED_BUS_NAME, DEVICED_PATH_SYSNOTI, DEVICED_INTERFACE_SYSNOTI,
-			UDEV);
+			"udev");
 		return -EBADMSG;
 	}
 

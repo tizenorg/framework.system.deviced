@@ -1,7 +1,7 @@
 /*
  * deviced
  *
- * Copyright (c) 2012 - 2013 Samsung Electronics Co., Ltd.
+ * Copyright (c) 2012 - 2015 Samsung Electronics Co., Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the License);
  * you may not use this file except in compliance with the License.
@@ -22,49 +22,52 @@
 
 #include <libudev.h>
 
-#define UDEV			"kernel"
-#define UDEV_SUBSYSTEM		"SUBSYSTEM"
+#define UDEV_CHANGE             "change"
+#define UDEV_ADD                "add"
+#define UDEV_REMOVE             "remove"
 
-#define UDEV_ACTION		"ACTION"
-#define UDEV_CHANGE		"change"
-#define UDEV_ADD		"add"
-#define UDEV_REMOVE		"remove"
-
-#define UDEV_DEVPATH		"DEVPATH"
-
-#define UDEV_MONITOR_SIZE	(10*1024)
-#define UDEV_MONITOR_SIZE_LARGE (128*1024*1024)
+#define UDEV_DEVPATH            "DEVPATH"
+#define UDEV_DEVTYPE            "DEVTYPE"
 
 /* platform */
-#define PLATFORM_SUBSYSTEM	"platform"
-#define THERMISTOR_PATH		"*/sec-thermistor"
+#define PLATFORM_SUBSYSTEM      "platform"
+#define THERMISTOR_PATH         "*/sec-thermistor"
 
 /* battery device */
-#define POWER_SUBSYSTEM		"power_supply"
-#define POWER_PATH			"/sys/class/power_supply/battery"
-#define POWER_SUPPLY_UEVENT POWER_PATH"/uevent"
-#define CAPACITY			"POWER_SUPPLY_CAPACITY"
-#define CHARGE_FULL			"POWER_SUPPLY_CHARGE_FULL"
-#define CHARGE_NOW			"POWER_SUPPLY_CHARGE_NOW"
-#define CHARGE_HEALTH		"POWER_SUPPLY_HEALTH"
-#define CHARGE_PRESENT		"POWER_SUPPLY_PRESENT"
-#define CHARGE_NAME			"POWER_SUPPLY_NAME"
-#define CHARGE_STATUS		"POWER_SUPPLY_STATUS"
-#define CHARGE_ONLINE		"POWER_SUPPLY_ONLINE"
+#define POWER_SUBSYSTEM         "power_supply"
+#define POWER_PATH              "/sys/class/power_supply/battery"
+#define POWER_SUPPLY_UEVENT     POWER_PATH"/uevent"
+#define CAPACITY                "POWER_SUPPLY_CAPACITY"
+#define CHARGE_FULL             "POWER_SUPPLY_CHARGE_FULL"
+#define CHARGE_NOW              "POWER_SUPPLY_CHARGE_NOW"
+#define CHARGE_HEALTH           "POWER_SUPPLY_HEALTH"
+#define CHARGE_PRESENT          "POWER_SUPPLY_PRESENT"
+#define CHARGE_NAME             "POWER_SUPPLY_NAME"
+#define CHARGE_STATUS           "POWER_SUPPLY_STATUS"
+#define CHARGE_ONLINE           "POWER_SUPPLY_ONLINE"
 
 /* input device */
-#define INPUT_SUBSYSTEM		"input"
-#define INPUT_PATH			"*/input[0-9]*/event[0-9]*"
+#define INPUT_SUBSYSTEM         "input"
+#define INPUT_PATH              "*/input[0-9]*/event[0-9]*"
 
 /* lcd esd device */
-#define LCD_EVENT_SUBSYSTEM	"lcd_event"
-#define LCD_ESD_PATH		"*/lcd_event/esd"
+#define LCD_EVENT_SUBSYSTEM     "lcd_event"
+#define LCD_ESD_PATH            "*/lcd_event/esd"
+
+/* extcon */
+#define EXTCON_SUBSYSTEM        "extcon"
 
 /* switch device */
-#define SWITCH_SUBSYSTEM	"switch"
+#define SWITCH_SUBSYSTEM        "switch"
 
-/* host device */
-#define HOST_SUBSYSTEM		"host_notify"
+/* usb */
+#define USB_SUBSYSTEM           "usb"
+#define USB_INTERFACE_DEVTYPE   "usb_interface"
+
+/* block */
+#define BLOCK_SUBSYSTEM         "block"
+#define BLOCK_DEVTYPE_DISK      "disk"
+#define BLOCK_DEVTYPE_PARTITION "partition"
 
 /* power supply status */
 enum {
@@ -83,16 +86,21 @@ enum {
 	 POWER_SUPPLY_TYPE_USB,
 };
 
+enum dock_type {
+	DOCK_NONE   = 0,
+	DOCK_SOUND  = 7,
+};
+
 struct uevent_handler {
 	char *subsystem;
 	void (*uevent_func)(struct udev_device *dev);
 	void *data;
 };
 
-int register_uevent_control(const struct uevent_handler *uh);
-void unregister_uevent_control(const struct uevent_handler *uh);
 int register_kernel_uevent_control(const struct uevent_handler *uh);
-void unregister_kernel_uevent_control(const struct uevent_handler *uh);
+int unregister_kernel_uevent_control(const struct uevent_handler *uh);
 
+int register_udev_uevent_control(const struct uevent_handler *uh);
+int unregister_udev_uevent_control(const struct uevent_handler *uh);
 
 #endif /* __UDEV_H__ */

@@ -41,8 +41,6 @@
 #define PREDEF_FOREGRD				"foregrd"
 #define PREDEF_ACTIVE				"active"
 #define PREDEF_INACTIVE				"inactive"
-#define PREDEF_SET_DATETIME			"set_datetime"
-#define PREDEF_SET_TIMEZONE			"set_timezone"
 
 #define PREDEF_SET_MAX_FREQUENCY		"set_max_frequency"
 #define PREDEF_SET_MIN_FREQUENCY		"set_min_frequency"
@@ -54,11 +52,6 @@
 #define PREDEF_DUMP_LOG			"dump_log"
 #define PREDEF_DELETE_DUMP		"delete_dump"
 #define FLIGHT_MODE		"flightmode"
-
-#define ALARM_BUS_NAME		"com.samsung.alarm.manager"
-#define ALARM_PATH_NAME		"/com/samsung/alarm/manager"
-#define ALARM_INTERFACE_NAME	ALARM_BUS_NAME
-#define ALARM_SET_TIME_METHOD	"alarm_set_time"
 
 enum deviced_noti_cmd {
 	ADD_deviced_ACTION,
@@ -140,44 +133,28 @@ static int noti_send(struct sysnoti *msg)
 		}
 		break;
 	}
-	if (retry_count == RETRY_READ_COUNT) {
+	if (retry_count == RETRY_READ_COUNT)
 		_E("Read retry failed");
-	}
 
 	close(client_sockfd);
 	return result;
 }
 
-static int dbus_flightmode_handler(char* type, char *buf)
+static int dbus_flightmode_handler(char *type, char *buf)
 {
-	DBusError err;
-	DBusMessage *msg;
 	char *pa[3];
-	int ret, val;
+	int ret;
 
 	pa[0] = type;
 	pa[1] = "1";
 	pa[2] = buf;
 
-	msg = dbus_method_sync_with_reply(DEVICED_BUS_NAME,
+	ret = dbus_method_sync(DEVICED_BUS_NAME,
 			DEVICED_PATH_POWER, DEVICED_INTERFACE_POWER,
 			pa[0], "sis", pa);
-	if (!msg)
-		return -EBADMSG;
 
-	dbus_error_init(&err);
-
-	ret = dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &val, DBUS_TYPE_INVALID);
-	if (!ret) {
-		_E("no message : [%s:%s]", err.name, err.message);
-		val = -EBADMSG;
-	}
-
-	dbus_message_unref(msg);
-	dbus_error_free(&err);
-
-	_D("%s-%s : %d", DEVICED_INTERFACE_POWER, pa[0], val);
-	return val;
+	_D("%s-%s : %d", DEVICED_INTERFACE_POWER, pa[0], ret);
+	return ret;
 }
 
 API int deviced_change_flightmode(int mode)
@@ -226,36 +203,21 @@ API int deviced_call_predef_action(const char *type, int num, ...)
 	return ret;
 }
 
-static int dbus_proc_handler(char* type, char *buf)
+static int dbus_proc_handler(char *type, char *buf)
 {
-	DBusError err;
-	DBusMessage *msg;
 	char *pa[3];
-	int ret, val;
+	int ret;
 
 	pa[0] = type;
 	pa[1] = "1";
 	pa[2] = buf;
 
-	msg = dbus_method_sync_with_reply(DEVICED_BUS_NAME,
+	ret = dbus_method_sync(DEVICED_BUS_NAME,
 			DEVICED_PATH_PROCESS, DEVICED_INTERFACE_PROCESS,
 			pa[0], "sis", pa);
-	if (!msg)
-		return -EBADMSG;
 
-	dbus_error_init(&err);
-
-	ret = dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &val, DBUS_TYPE_INVALID);
-	if (!ret) {
-		_E("no message : [%s:%s]", err.name, err.message);
-		val = -EBADMSG;
-	}
-
-	dbus_message_unref(msg);
-	dbus_error_free(&err);
-
-	_D("%s-%s : %d", DEVICED_INTERFACE_PROCESS, pa[0], val);
-	return val;
+	_D("%s-%s : %d", DEVICED_INTERFACE_PROCESS, pa[0], ret);
+	return ret;
 }
 
 API int deviced_inform_foregrd(void)
@@ -286,35 +248,20 @@ API int deviced_inform_inactive(pid_t pid)
 	return dbus_proc_handler(PREDEF_INACTIVE, buf);
 }
 
-static int dbus_power_handler(char* type)
+static int dbus_power_handler(char *type)
 {
-	DBusError err;
-	DBusMessage *msg;
 	char *pa[2];
-	int ret, val;
+	int ret;
 
 	pa[0] = type;
 	pa[1] = "0";
 
-	msg = dbus_method_sync_with_reply(DEVICED_BUS_NAME,
+	ret = dbus_method_sync(DEVICED_BUS_NAME,
 			DEVICED_PATH_POWER, DEVICED_INTERFACE_POWER,
 			pa[0], "si", pa);
-	if (!msg)
-		return -EBADMSG;
 
-	dbus_error_init(&err);
-
-	ret = dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &val, DBUS_TYPE_INVALID);
-	if (!ret) {
-		_E("no message : [%s:%s]", err.name, err.message);
-		val = -EBADMSG;
-	}
-
-	dbus_message_unref(msg);
-	dbus_error_free(&err);
-
-	_D("%s-%s : %d", DEVICED_INTERFACE_POWER, pa[0], val);
-	return val;
+	_D("%s-%s : %d", DEVICED_INTERFACE_POWER, pa[0], ret);
+	return ret;
 }
 
 API int deviced_request_poweroff(void)
@@ -337,170 +284,22 @@ API int deviced_request_reboot(void)
 	return dbus_power_handler(PREDEF_REBOOT);
 }
 
-static int dbus_time_handler(char* type, char* buf)
+static int dbus_cpu_handler(char *type, char *buf_pid, char *buf_freq)
 {
-	DBusError err;
-	DBusMessage *msg;
-	pid_t pid;
-	char name[PATH_MAX];
-	char *pa[3];
-	int ret, val;
-
-	pa[0] = type;
-	pa[1] = "1";
-	pa[2] = buf;
-
-	pid = getpid();
-	ret = deviced_get_cmdline_name(pid, name, sizeof(name));
-	if (ret != 0)
-		snprintf(name, sizeof(name), "%d", pid);
-
-	msg = dbus_method_sync_with_reply(DEVICED_BUS_NAME,
-			DEVICED_PATH_SYSNOTI, DEVICED_INTERFACE_SYSNOTI,
-			pa[0], "sis", pa);
-	if (!msg)
-		return -EBADMSG;
-
-	dbus_error_init(&err);
-
-	ret = dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &val, DBUS_TYPE_INVALID);
-	if (!ret) {
-		_E("no message : [%s:%s]", err.name, err.message);
-		val = -EBADMSG;
-	}
-
-	dbus_message_unref(msg);
-	dbus_error_free(&err);
-
-	_SI("[%s] %s-%s(%s) : %d", name, DEVICED_INTERFACE_SYSNOTI, pa[0], pa[2], val);
-
-	return val;
-}
-
-static DBusMessage *alarm_set_time_sync_with_reply(time_t timet)
-{
-	DBusConnection *conn;
-	DBusMessage *msg;
-	DBusMessageIter iter;
-	DBusMessage *reply;
-	DBusError err;
-	int r;
-
-	conn = dbus_bus_get(DBUS_BUS_SYSTEM, NULL);
-	if (!conn) {
-		_E("dbus_bus_get error");
-		return NULL;
-	}
-
-	msg = dbus_message_new_method_call(ALARM_BUS_NAME, ALARM_PATH_NAME, ALARM_INTERFACE_NAME, ALARM_SET_TIME_METHOD);
-	if (!msg) {
-		_E("dbus_message_new_method_call(%s:%s-%s)",
-			ALARM_PATH_NAME, ALARM_INTERFACE_NAME, ALARM_SET_TIME_METHOD);
-		return NULL;
-	}
-
-	dbus_message_iter_init_append(msg, &iter);
-	dbus_message_iter_append_basic(&iter, DBUS_TYPE_INT32, &timet);
-
-	dbus_error_init(&err);
-
-	reply = dbus_connection_send_with_reply_and_block(conn, msg, -1, &err);
-	if (!reply) {
-		_E("dbus_connection_send error(No reply) %s %s:%s-%s",
-			ALARM_BUS_NAME, ALARM_PATH_NAME, ALARM_INTERFACE_NAME, ALARM_SET_TIME_METHOD);
-	}
-
-	if (dbus_error_is_set(&err)) {
-		_E("dbus_connection_send error(%s:%s) %s %s:%s-%s",
-			err.name, err.message, ALARM_BUS_NAME, ALARM_PATH_NAME, ALARM_INTERFACE_NAME, ALARM_SET_TIME_METHOD);
-		dbus_error_free(&err);
-		reply = NULL;
-	}
-
-	dbus_message_unref(msg);
-	return reply;
-}
-
-static int alarm_set_time(time_t timet)
-{
-	DBusError err;
-	DBusMessage *msg;
-	pid_t pid;
-	char name[PATH_MAX];
-	int ret, val;
-
-	pid = getpid();
-	ret = deviced_get_cmdline_name(pid, name, sizeof(name));
-	if (ret != 0)
-		snprintf(name, sizeof(name), "%d", pid);
-	_SI("[%s]start %s %ld", name, ALARM_INTERFACE_NAME, timet);
-
-	msg = alarm_set_time_sync_with_reply(timet);
-	if (!msg)
-		return -EBADMSG;
-
-	dbus_error_init(&err);
-
-	ret = dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &val, DBUS_TYPE_INVALID);
-	if (!ret) {
-		_E("no message : [%s:%s]", err.name, err.message);
-		val = -EBADMSG;
-	}
-
-	dbus_message_unref(msg);
-	dbus_error_free(&err);
-
-	_SI("[%s]end %s %ld, %d", name, ALARM_INTERFACE_NAME, timet, val);
-	return val;
-}
-
-API int deviced_set_datetime(time_t timet)
-{
-	if (timet < 0L)
-		return -1;
-	return alarm_set_time(timet);
-}
-
-API int deviced_set_timezone(char *tzpath_str)
-{
-	if (tzpath_str == NULL)
-		return -1;
-	char buf[255];
-	snprintf(buf, sizeof(buf), "%s", tzpath_str);
-	return dbus_time_handler(PREDEF_SET_TIMEZONE, buf);
-}
-
-static int dbus_cpu_handler(char* type, char* buf_pid, char* buf_freq)
-{
-	DBusError err;
-	DBusMessage *msg;
 	char *pa[4];
-	int ret, val;
+	int ret;
 
 	pa[0] = type;
 	pa[1] = "2";
 	pa[2] = buf_pid;
 	pa[3] = buf_freq;
 
-	msg = dbus_method_sync_with_reply(DEVICED_BUS_NAME,
+	ret = dbus_method_sync(DEVICED_BUS_NAME,
 			DEVICED_PATH_SYSNOTI, DEVICED_INTERFACE_SYSNOTI,
 			pa[0], "siss", pa);
-	if (!msg)
-		return -EBADMSG;
 
-	dbus_error_init(&err);
-
-	ret = dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &val, DBUS_TYPE_INVALID);
-	if (!ret) {
-		_E("no message : [%s:%s]", err.name, err.message);
-		val = -EBADMSG;
-	}
-
-	dbus_message_unref(msg);
-	dbus_error_free(&err);
-
-	_D("%s-%s : %d", DEVICED_INTERFACE_SYSNOTI, pa[0], val);
-	return val;
+	_D("%s-%s : %d", DEVICED_INTERFACE_SYSNOTI, pa[0], ret);
+	return ret;
 }
 
 API int deviced_request_set_cpu_max_frequency(int val)
@@ -508,7 +307,6 @@ API int deviced_request_set_cpu_max_frequency(int val)
 	char buf_pid[8];
 	char buf_freq[256];
 
-	// to do - need to check new frequncy is valid
 	snprintf(buf_pid, sizeof(buf_pid), "%d", getpid());
 	snprintf(buf_freq, sizeof(buf_freq), "%d", val * 1000);
 
@@ -520,7 +318,6 @@ API int deviced_request_set_cpu_min_frequency(int val)
 	char buf_pid[8];
 	char buf_freq[256];
 
-	// to do - need to check new frequncy is valid
 	snprintf(buf_pid, sizeof(buf_pid), "%d", getpid());
 	snprintf(buf_freq, sizeof(buf_freq), "%d", val * 1000);
 
@@ -545,42 +342,27 @@ API int deviced_release_cpu_min_frequency()
 	return dbus_cpu_handler(PREDEF_RELEASE_MIN_FREQUENCY, buf_pid, "2");
 }
 
-static int dbus_factory_handler(char* type, char* buf)
+static int dbus_factory_handler(char *type, char *buf)
 {
-	DBusError err;
-	DBusMessage *msg;
 	char *pa[3];
-	int ret, val;
+	int ret;
 
 	pa[0] = type;
 	pa[1] = "1";
 	pa[2] = buf;
 
-	msg = dbus_method_sync_with_reply(DEVICED_BUS_NAME,
+	ret = dbus_method_sync(DEVICED_BUS_NAME,
 			DEVICED_PATH_SYSNOTI, DEVICED_INTERFACE_SYSNOTI,
 			pa[0], "sis", pa);
-	if (!msg)
-		return -EBADMSG;
 
-	dbus_error_init(&err);
-
-	ret = dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &val, DBUS_TYPE_INVALID);
-	if (!ret) {
-		_E("no message : [%s:%s]", err.name, err.message);
-		val = -EBADMSG;
-	}
-
-	dbus_message_unref(msg);
-	dbus_error_free(&err);
-
-	_D("%s-%s : %d", DEVICED_INTERFACE_SYSNOTI, pa[0], val);
-	return val;
+	_D("%s-%s : %d", DEVICED_INTERFACE_SYSNOTI, pa[0], ret);
+	return ret;
 }
 
 API int deviced_request_set_factory_mode(int val)
 {
 	char buf_mode[8];
-	if ( val == 0 || val == 1 ) {
+	if (val == 0 || val == 1) {
 		snprintf(buf_mode, sizeof(buf_mode), "%d", val);
 		return dbus_factory_handler(PREDEF_FACTORY_MODE, buf_mode);
 	} else {
@@ -588,41 +370,26 @@ API int deviced_request_set_factory_mode(int val)
 	}
 }
 
-static int dbus_crash_handler(char* type, char* buf)
+static int dbus_crash_handler(char *type, char *buf)
 {
-	DBusError err;
-	DBusMessage *msg;
 	char *pa[3];
-	int ret, val;
+	int ret;
 
 	pa[0] = type;
 	pa[1] = "1";
 	pa[2] = buf;
-	msg = dbus_method_sync_with_reply(CRASHD_BUS_NAME,
+	ret = dbus_method_sync(CRASHD_BUS_NAME,
 			CRASHD_PATH_CRASH, CRASHD_INTERFACE_CRASH,
 			pa[0], "sis", pa);
-	if (!msg)
-		return -EBADMSG;
 
-	dbus_error_init(&err);
-
-	ret = dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &val, DBUS_TYPE_INVALID);
-	if (!ret) {
-		_E("no message : [%s:%s]", err.name, err.message);
-		val = -EBADMSG;
-	}
-
-	dbus_message_unref(msg);
-	dbus_error_free(&err);
-
-	_D("%s-%s : %d", CRASHD_INTERFACE_CRASH, pa[0], val);
-	return val;
+	_D("%s-%s : %d", CRASHD_INTERFACE_CRASH, pa[0], ret);
+	return ret;
 }
 
 API int deviced_request_dump_log(int type)
 {
 	char buf_mode[8];
-	if ( type == AP_DUMP || type == CP_DUMP || type == ALL_DUMP) {
+	if (type == AP_DUMP || type == CP_DUMP || type == ALL_DUMP) {
 		snprintf(buf_mode, sizeof(buf_mode), "%d", type);
 		return dbus_crash_handler(PREDEF_DUMP_LOG, buf_mode);
 	} else {
@@ -633,9 +400,8 @@ API int deviced_request_dump_log(int type)
 API int deviced_request_delete_dump(char *ticket)
 {
 	char buf[255];
-	if ( ticket == NULL) {
+	if (ticket == NULL)
 		return -1;
-	}
 	snprintf(buf, sizeof(buf), "%s", ticket);
 	return dbus_crash_handler(PREDEF_DELETE_DUMP, buf);
 }

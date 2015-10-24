@@ -142,14 +142,16 @@ static void app2ext_init(void *data)
 		return;
 	}
 
-	ret = register_edbus_method(DEVICED_PATH_MMC, edbus_methods, ARRAY_SIZE(edbus_methods));
+	ret = register_edbus_interface_and_method(DEVICED_PATH_MMC,
+			DEVICED_INTERFACE_MMC,
+			edbus_methods, ARRAY_SIZE(edbus_methods));
 	if (ret < 0)
-		_E("fail to init edbus method(%d)", ret);
+		_E("fail to init edbus interface and method(%d)", ret);
 }
 
 static void app2ext_exit(void *data)
 {
-	if(!app2ext_dl)
+	if (!app2ext_dl)
 		return;
 
 	dlclose(app2ext_dl);
@@ -157,7 +159,6 @@ static void app2ext_exit(void *data)
 }
 
 const struct device_ops app2ext_device_ops = {
-	.priority = DEVICE_PRIORITY_NORMAL,
 	.name     = "app2ext",
 	.init     = app2ext_init,
 	.exit     = app2ext_exit,

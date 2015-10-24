@@ -1,7 +1,7 @@
 /*
  * deviced
  *
- * Copyright (c) 2012 - 2013 Samsung Electronics Co., Ltd.
+ * Copyright (c) 2012 - 2015 Samsung Electronics Co., Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the License);
  * you may not use this file except in compliance with the License.
@@ -42,7 +42,7 @@ static struct mmc_policy_type {
 	.max_ratio = MAX_RATIO_DURATION,
 };
 
-static void mmc_max_ratio(void)
+static void mmc_max_ratio(const char *devnode)
 {
 	char buf[PATH_MAX];
 	FILE *fp;
@@ -50,10 +50,10 @@ static void mmc_max_ratio(void)
 	int num;
 	int retry;
 
-	num = get_block_number();
+	sscanf(devnode, "/dev/mmcblk%d%*s", &num);
 	snprintf(buf, PATH_MAX, MAX_RATIO_PATH, num);
 
-	for (retry = MAX_RATIO_CONFIG_RETRY; retry > 0 ; retry--) {
+	for (retry = MAX_RATIO_CONFIG_RETRY; retry > 0; retry--) {
 		ret = sys_set_int(buf, mmc_policy.max_ratio);
 		if (ret == 0)
 			break;
@@ -94,11 +94,11 @@ void mmc_load_config(void)
 		_E("Failed to load %s, %d Use default value!", MAX_RATIO_CONF_FILE, ret);
 }
 
-void mmc_set_config(enum mmc_config_type type)
+void mmc_set_config(const char *devnode, enum mmc_config_type type)
 {
-	switch(type) {
+	switch (type) {
 	case MAX_RATIO:
-		mmc_max_ratio();
+		mmc_max_ratio(devnode);
 	break;
 	}
 }

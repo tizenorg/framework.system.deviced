@@ -58,7 +58,11 @@ struct usb_client_mode usb_mode_match[] = {
 static dd_list *oper_list;       /* Operations for USB mode */
 static dd_list *conf_list;       /* Configurations for usb mode */
 static char root_path[BUF_MAX] = {0,};
-
+static struct usb_common_config usb_common_conf = {
+	.wait_configured_connected = 0,
+	.set_operation_connected = 1,
+	.set_notification_connected = 1,
+};
 
 int get_operations_list(dd_list **list)
 {
@@ -94,7 +98,7 @@ static int find_usb_mode_str(int usb_mode, char **name)
 	if (!name)
 		return -EINVAL;
 
-	for (i = 0 ; i < ARRAY_SIZE(usb_mode_match) ; i++) {
+	for (i = 0; i < ARRAY_SIZE(usb_mode_match); i++) {
 		if (usb_mode == usb_mode_match[i].mode) {
 			*name = usb_mode_match[i].name;
 			return 0;
@@ -265,3 +269,50 @@ void release_operations_list(void)
 	DD_LIST_FREE_LIST(oper_list);
 	oper_list = NULL;
 }
+
+static int load_common_config(struct parse_result *result, void *user_data)
+{
+	struct usb_common_config *c = user_data;
+
+	if (!c)
+		return -EINVAL;
+
+	if (!MATCH(result->section, "Common"))
+		return 0;
+
+	if (MATCH(result->name, "wait_configured_connected")) {
+		c->wait_configured_connected =
+		    (MATCH(result->value, "yes") ? 1 : 0);
+		_D("wait_configured_connected is %d",
+		    c->wait_configured_connected);
+	} else if (MATCH(result->name, "set_operation_connected")) {
+		c->set_operation_connected =
+		    (MATCH(result->value, "yes") ? 1 : 0);
+		_D("set_operation_connected is %d",
+		    c->set_operation_connected);
+	} else if (MATCH(result->name, "set_notification_connected")) {
+		c->set_notification_connected =
+		    (MATCH(result->value, "yes") ? 1 : 0);
+		_D("set_notification_connected is %d",
+		    c->set_notification_connected);
+	}
+
+	return 0;
+}
+
+struct usb_common_config *get_usb_common_config(void)
+{
+	return &usb_common_conf;
+}
+
+void init_common_config(void)
+{
+	int ret;
+
+	ret = config_parse(USB_CLIENT_CONFIGURATION,
+	    load_common_config, &usb_common_conf);
+	if (ret < 0)
+		_W("Failed to load %s, Use default values!",
+		    USB_CLIENT_CONFIGURATION);
+}
+

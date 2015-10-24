@@ -30,6 +30,7 @@
 #define LOWBAT_OPT_CHARGEERR		3
 #define LOWBAT_OPT_CHECK		4
 
+#define METHOD_NAME_MAX			32
 struct battery_config_info {
 	int normal;
 	int warning;

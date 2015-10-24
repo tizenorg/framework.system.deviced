@@ -34,27 +34,16 @@
 #include "core/common.h"
 #include "core/devices.h"
 #include "core/device-notifier.h"
-#include "display/enhance.h"
+#include "core/udev.h"
 #include "proc-handler.h"
 #include "core/edbus-handler.h"
+#include "shared/score-defines.h"
 
 #define TEMPERATURE_DBUS_INTERFACE	"org.tizen.trm.siop"
 #define TEMPERATURE_DBUS_PATH		"/Org/Tizen/Trm/Siop"
 #define TEMPERATURE_DBUS_SIGNAL		"ChangedTemperature"
 
-#define LIMITED_PROCESS_OOMADJ 15
-
-#define PROCESS_VIP		"process_vip"
-#define PROCESS_PERMANENT	"process_permanent"
 #define OOMADJ_SET			"oomadj_set"
-
-#define PREDEF_BACKGRD			"backgrd"
-#define PREDEF_FOREGRD			"foregrd"
-#define PREDEF_ACTIVE			"active"
-#define PREDEF_INACTIVE			"inactive"
-#define PROCESS_GROUP_SET		"process_group_set"
-
-#define VCONFKEY_INTERNAL_PRIVATE_SIOP_DISABLE	"memory/private/sysman/siop_disable"
 
 #define BUFF_MAX	255
 #define SIOP_CTRL_LEVEL_MASK	0xFFFF
@@ -68,8 +57,17 @@
 #define SIOP_LEVEL_GET		"GetSiopLevel"
 #define REAR_LEVEL_GET		"GetRearLevel"
 #define SIOP_LEVEL_SET		"SetSiopLevel"
+#define OOM_PMQOS_TIME		2000 /* ms */
 
-#define SIGNAL_NAME_OOMADJ_SET	"OomadjSet"
+#define SIGNAL_PROC_STATUS	"ProcStatus"
+
+enum proc_status_type {
+	PROC_STATUS_LAUNCH,
+	PROC_STATUS_RESUME,
+	PROC_STATUS_TERMINATE,
+	PROC_STATUS_FOREGROUND,
+	PROC_STATUS_BACKGROUND,
+};
 
 enum SIOP_DOMAIN_TYPE {
 	SIOP_NEGATIVE = -1,
@@ -81,76 +79,14 @@ struct siop_data {
 	int rear;
 };
 
-static int siop = 0;
-static int mode = 0;
+static int siop;
+static int mode;
 static int siop_domain = SIOP_POSITIVE;
 
 enum siop_scenario {
 	MODE_NONE = 0,
 	MODE_LCD = 1,
 };
-#ifdef NOUSE
-typedef struct _node {
-	pid_t pid;
-	struct _node *next;
-} Node;
-
-static Node *head = NULL;
-
-static Node *find_node(pid_t pid)
-{
-	Node *t = head;
-
-	while (t != NULL) {
-		if (t->pid == pid)
-			break;
-		t = t->next;
-	}
-	return t;
-}
-
-static Node *add_node(pid_t pid)
-{
-	Node *n;
-
-	n = (Node *) malloc(sizeof(Node));
-	if (n == NULL) {
-		_E("Not enough memory, add cond. fail");
-		return NULL;
-	}
-
-	n->pid = pid;
-	n->next = head;
-	head = n;
-
-	return n;
-}
-
-static int del_node(Node *n)
-{
-	Node *t;
-	Node *prev;
-
-	if (n == NULL)
-		return 0;
-
-	t = head;
-	prev = NULL;
-	while (t != NULL) {
-		if (t == n) {
-			if (prev != NULL)
-				prev->next = t->next;
-			else
-				head = head->next;
-			free(t);
-			break;
-		}
-		prev = t;
-		t = t->next;
-	}
-	return 0;
-}
-#endif
 
 int cur_siop_level(void)
 {
@@ -161,10 +97,10 @@ static void siop_level_action(int level)
 {
 	int val = SIOP_CTRL_LEVEL(level);
 	static int old;
-	static int siop_level = 0;
-	static int rear_level = 0;
-	static int initialized = 0;
-	static int domain = 0;
+	static int siop_level;
+	static int rear_level;
+	static int initialized;
+	static int domain;
 	char *arr[1];
 	char str_level[32];
 
@@ -207,7 +143,6 @@ static int siop_changed(int argc, char **argv)
 	int siop_level = 0;
 	int rear_level = 0;
 	int level;
-	int siop_disable;
 	int ret;
 
 	if (argc != 2 || argv[0] == NULL) {
@@ -261,7 +196,7 @@ static void memcg_move_group(int pid, int oom_score_adj)
 {
 	char buf[100];
 	FILE *f;
-	int ret, size;
+	int size;
 	char exe_name[PATH_MAX];
 
 	if (get_cmdline_name(pid, exe_name, PATH_MAX) != 0) {
@@ -271,80 +206,19 @@ static void memcg_move_group(int pid, int oom_score_adj)
 
 	_SD("memcg_move_group : %s, pid = %d", exe_name, pid);
 	if (oom_score_adj >= OOMADJ_BACKGRD_LOCKED)
-		sprintf(buf, "/sys/fs/cgroup/memory/background/cgroup.procs");
+		snprintf(buf, sizeof(buf), "/sys/fs/cgroup/memory/background/cgroup.procs");
 	else if (oom_score_adj >= OOMADJ_FOREGRD_LOCKED && oom_score_adj < OOMADJ_BACKGRD_LOCKED)
-		sprintf(buf, "/sys/fs/cgroup/memory/foreground/cgroup.procs");
+		snprintf(buf, sizeof(buf), "/sys/fs/cgroup/memory/foreground/cgroup.procs");
 	else
 		return;
 
 	f = fopen(buf, "w");
 	if (f == NULL)
 		return;
-	size = sprintf(buf, "%d", pid);
+	size = snprintf(buf, sizeof(buf), "%d", pid);
 	if (fwrite(buf, size, 1, f) != 1)
-		_E("fwrite cgroup tasks : %d\n", pid);;
+		_E("fwrite cgroup tasks : %d", pid);
 	fclose(f);
-}
-
-int get_oom_score_adj(int pid, int *oom_score_adj)
-{
-	char buf[PATH_MAX];
-	FILE *fp;
-
-	if (pid < 0)
-		return -1;
-
-	fp = open_proc_oom_score_adj_file(pid, "r");
-	if (fp == NULL)
-		return -1;
-	if (fgets(buf, PATH_MAX, fp) == NULL) {
-		fclose(fp);
-		return -1;
-	}
-
-	*oom_score_adj = atoi(buf);
-	fclose(fp);
-	return 0;
-}
-
-int set_oom_score_adj(pid_t pid, int new_oom_score_adj)
-{
-	FILE *fp;
-	int old_oom_score_adj;
-	char exe_name[PATH_MAX];
-
-	if (get_cmdline_name(pid, exe_name, PATH_MAX) < 0)
-		snprintf(exe_name, sizeof(exe_name), "Unknown (maybe dead)");
-
-	if (get_oom_score_adj(pid, &old_oom_score_adj) < 0)
-		return -1;
-
-	_SI("Process %s, pid %d, old_oom_score_adj %d new_oom_score_adj %d",
-		exe_name, pid, old_oom_score_adj, new_oom_score_adj);
-
-	if (new_oom_score_adj < OOMADJ_SU)
-		new_oom_score_adj = OOMADJ_SU;
-
-	fp = open_proc_oom_score_adj_file(pid, "w");
-	if (fp == NULL)
-		return -1;
-
-	fprintf(fp, "%d", new_oom_score_adj);
-	fclose(fp);
-
-	return 0;
-}
-
-int set_su_oom_score_adj(pid_t pid)
-{
-	return set_oom_score_adj(pid, OOMADJ_SU);
-}
-
-int check_oom_score_adj(int oom_score_adj)
-{
-	if (oom_score_adj != OOMADJ_FOREGRD_LOCKED && oom_score_adj != OOMADJ_FOREGRD_UNLOCKED)
-		return 0;
-	return -1;
 }
 
 int set_oom_score_adj_action(int argc, char **argv)
@@ -355,7 +229,9 @@ int set_oom_score_adj_action(int argc, char **argv)
 
 	if (argc < 2)
 		return -1;
-	if ((pid = atoi(argv[0])) < 0 || (new_oom_score_adj = atoi(argv[1])) <= -20)
+	pid = atoi(argv[0]);
+	new_oom_score_adj = atoi(argv[1]);
+	if (pid < 0 || new_oom_score_adj <= -20)
 		return -1;
 
 	_I("OOMADJ_SET : pid %d, new_oom_score_adj %d", pid, new_oom_score_adj);
@@ -370,213 +246,6 @@ int set_oom_score_adj_action(int argc, char **argv)
 
 	memcg_move_group(pid, new_oom_score_adj);
 	return 0;
-}
-
-int set_active_action(int argc, char **argv)
-{
-	int pid = -1;
-	int ret = 0;
-	int oom_score_adj = 0;
-
-	if (argc < 1)
-		return -1;
-	if ((pid = atoi(argv[0])) < 0)
-		return -1;
-
-	if (get_oom_score_adj(pid, &oom_score_adj) < 0)
-		return -1;
-
-	switch (oom_score_adj) {
-	case OOMADJ_FOREGRD_LOCKED:
-	case OOMADJ_BACKGRD_LOCKED:
-	case OOMADJ_SU:
-		ret = 0;
-		break;
-	case OOMADJ_FOREGRD_UNLOCKED:
-		ret = set_oom_score_adj((pid_t) pid, OOMADJ_FOREGRD_LOCKED);
-		break;
-	case OOMADJ_BACKGRD_UNLOCKED:
-		ret = set_oom_score_adj((pid_t) pid, OOMADJ_BACKGRD_LOCKED);
-		break;
-	case OOMADJ_INIT:
-		ret = set_oom_score_adj((pid_t) pid, OOMADJ_BACKGRD_LOCKED);
-		break;
-	default:
-		if(oom_score_adj > OOMADJ_BACKGRD_UNLOCKED) {
-			ret = set_oom_score_adj((pid_t) pid, OOMADJ_BACKGRD_LOCKED);
-		} else {
-			_E("Unknown oom_score_adj value (%d) !", oom_score_adj);
-			ret = -1;
-		}
-		break;
-	}
-	set_enhance_pid(pid);
-	return ret;
-}
-
-int set_inactive_action(int argc, char **argv)
-{
-	int pid = -1;
-	int ret = 0;
-	int oom_score_adj = 0;
-
-	if (argc < 1)
-		return -1;
-	if ((pid = atoi(argv[0])) < 0)
-		return -1;
-
-	if (get_oom_score_adj(pid, &oom_score_adj) < 0)
-		return -1;
-
-	switch (oom_score_adj) {
-	case OOMADJ_FOREGRD_UNLOCKED:
-	case OOMADJ_BACKGRD_UNLOCKED:
-	case OOMADJ_SU:
-		ret = 0;
-		break;
-	case OOMADJ_FOREGRD_LOCKED:
-		ret = set_oom_score_adj((pid_t) pid, OOMADJ_FOREGRD_UNLOCKED);
-		break;
-	case OOMADJ_BACKGRD_LOCKED:
-		ret = set_oom_score_adj((pid_t) pid, OOMADJ_BACKGRD_UNLOCKED);
-		break;
-	case OOMADJ_INIT:
-		ret = set_oom_score_adj((pid_t) pid, OOMADJ_BACKGRD_UNLOCKED);
-		break;
-	default:
-		if(oom_score_adj > OOMADJ_BACKGRD_UNLOCKED) {
-			ret = 0;
-		} else {
-			_E("Unknown oom_score_adj value (%d) !", oom_score_adj);
-			ret = -1;
-		}
-		break;
-
-	}
-	set_enhance_pid(pid);
-	return ret;
-}
-
-int set_process_action(int argc, char **argv)
-{
-	int pid = -1;
-	int ret = 0;
-
-	if (argc < 1)
-		return -1;
-	if ((pid = atoi(argv[0])) < 0)
-		return -1;
-
-	set_enhance_pid(pid);
-	return ret;
-}
-
-int set_process_group_action(int argc, char **argv)
-{
-	int pid = -1;
-	int ret = -1;
-
-	if (argc != 2)
-		return -1;
-	if ((pid = atoi(argv[0])) < 0)
-		return -1;
-
-	if (strncmp(argv[1], PROCESS_VIP, strlen(PROCESS_VIP)) == 0)
-		ret = device_set_property(DEVICE_TYPE_PROCESS, PROP_PROCESS_MP_VIP, pid);
-	else if (strncmp(argv[1], PROCESS_PERMANENT, strlen(PROCESS_PERMANENT)) == 0)
-		ret = device_set_property(DEVICE_TYPE_PROCESS, PROP_PROCESS_MP_PNP, pid);
-
-	if (ret == 0)
-		_I("%s : pid %d", argv[1], pid);
-	else
-		_E("fail to set %s : pid %d",argv[1], pid);
-	return 0;
-}
-
-void check_siop_disable_process(int pid, char *default_name)
-{
-	int oom_score_adj;
-	char exe_name[PATH_MAX];
-	if (pid <= 0)
-		return;
-
-	if (get_oom_score_adj(pid, &oom_score_adj) < 0) {
-		_E("fail to get adj value of pid: %d (%d)", pid);
-		return;
-	}
-
-	if (get_cmdline_name(pid, exe_name, PATH_MAX) != 0) {
-		_E("fail to check cmdline: %d (%s)", pid, default_name);
-		return;
-	}
-
-	if (strncmp(exe_name, default_name, strlen(default_name)) != 0) {
-		return;
-	}
-
-	switch (oom_score_adj) {
-	case OOMADJ_FOREGRD_LOCKED:
-	case OOMADJ_FOREGRD_UNLOCKED:
-		siop_level_action(0);
-		vconf_set_int(VCONFKEY_INTERNAL_PRIVATE_SIOP_DISABLE, 1);
-		return;
-	case OOMADJ_BACKGRD_LOCKED:
-	case OOMADJ_BACKGRD_UNLOCKED:
-	case OOMADJ_SU:
-		vconf_set_int(VCONFKEY_INTERNAL_PRIVATE_SIOP_DISABLE, 0);
-	}
-	return;
-}
-
-static DBusMessage *dbus_proc_handler(E_DBus_Object *obj, DBusMessage *msg)
-{
-	DBusError err;
-	DBusMessageIter iter;
-	DBusMessage *reply;
-	pid_t pid;
-	int ret;
-	int argc;
-	char *type_str;
-	char *argv;
-
-	dbus_error_init(&err);
-
-	if (!dbus_message_get_args(msg, &err,
-		    DBUS_TYPE_STRING, &type_str,
-		    DBUS_TYPE_INT32, &argc,
-		    DBUS_TYPE_STRING, &argv, DBUS_TYPE_INVALID)) {
-		_E("there is no message");
-		ret = -EINVAL;
-		goto out;
-	}
-
-	if (argc < 0) {
-		_E("message is invalid!");
-		ret = -EINVAL;
-		goto out;
-	}
-
-	pid = get_edbus_sender_pid(msg);
-	if (kill(pid, 0) == -1) {
-		_E("%d process does not exist, dbus ignored!", pid);
-		ret = -ESRCH;
-		goto out;
-	}
-
-	if (strncmp(type_str, PREDEF_FOREGRD, strlen(PREDEF_FOREGRD)) == 0)
-		ret = set_process_action(argc, (char **)&argv);
-	else if (strncmp(type_str, PREDEF_BACKGRD, strlen(PREDEF_BACKGRD)) == 0)
-		ret = set_process_action(argc, (char **)&argv);
-	else if (strncmp(type_str, PREDEF_ACTIVE, strlen(PREDEF_ACTIVE)) == 0)
-		ret = set_active_action(argc, (char **)&argv);
-	else if (strncmp(type_str, PREDEF_INACTIVE, strlen(PREDEF_INACTIVE)) == 0)
-		ret = set_inactive_action(argc, (char **)&argv);
-out:
-	reply = dbus_message_new_method_return(msg);
-	dbus_message_iter_init_append(reply, &iter);
-	dbus_message_iter_append_basic(&iter, DBUS_TYPE_INT32, &ret);
-
-	return reply;
 }
 
 static DBusMessage *dbus_oom_handler(E_DBus_Object *obj, DBusMessage *msg)
@@ -617,8 +286,9 @@ static DBusMessage *dbus_oom_handler(E_DBus_Object *obj, DBusMessage *msg)
 
 	if (strncmp(type_str, OOMADJ_SET, strlen(OOMADJ_SET)) == 0)
 		ret = set_oom_score_adj_action(argc, (char **)&argv);
-	else if (strncmp(type_str, PROCESS_GROUP_SET, strlen(PROCESS_GROUP_SET)) == 0)
-		ret = set_process_group_action(argc, (char **)&argv);
+	else
+		ret = -EINVAL;
+
 out:
 	reply = dbus_message_new_method_return(msg);
 	dbus_message_iter_init_append(reply, &iter);
@@ -679,57 +349,33 @@ out:
 	return reply;
 }
 
-static void dbus_proc_oomadj_set_signal_handler(void *data, DBusMessage *msg)
-
+static void proc_signal_handler(void *data, DBusMessage *msg)
 {
 	DBusError err;
+	int ret, type;
 	pid_t pid;
-	int ret = -EINVAL;
-	int argc;
-	char *type_str;
-	char *argv;
+
+	ret = dbus_message_is_signal(msg, RESOURCED_INTERFACE_PROCESS,
+	    SIGNAL_PROC_STATUS);
+	if (!ret) {
+		_E("It's not active signal!");
+		return;
+	}
 
 	dbus_error_init(&err);
 
-	if (!dbus_message_get_args(msg, &err,
-		    DBUS_TYPE_STRING, &type_str,
-		    DBUS_TYPE_INT32, &argc,
-		    DBUS_TYPE_STRING, &argv, DBUS_TYPE_INVALID)) {
-		_E("there is no message");
+	if (dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &type,
+	    DBUS_TYPE_INT32, &pid, DBUS_TYPE_INVALID) == 0) {
+		_E("There's no arguments!");
 		return;
 	}
 
-	if (argc < 0) {
-		_E("message is invalid!");
-		return;
-	}
-
-	pid = get_edbus_sender_pid(msg);
-	if (kill(pid, 0) == -1) {
-		_E("%d process does not exist, dbus ignored!", pid);
-		return;
-	}
-
-	if (strncmp(type_str, PREDEF_FOREGRD, strlen(PREDEF_FOREGRD)) == 0)
-		ret = set_process_action(argc, (char **)&argv);
-	else if (strncmp(type_str, PREDEF_BACKGRD, strlen(PREDEF_BACKGRD)) == 0)
-		ret = set_process_action(argc, (char **)&argv);
-	else if (strncmp(type_str, PREDEF_ACTIVE, strlen(PREDEF_ACTIVE)) == 0)
-		ret = set_active_action(argc, (char **)&argv);
-	else if (strncmp(type_str, PREDEF_INACTIVE, strlen(PREDEF_INACTIVE)) == 0)
-		ret = set_inactive_action(argc, (char **)&argv);
-
-	if (ret < 0)
-		_E("set_process_action error!");
+	if (type == PROC_STATUS_BACKGROUND)
+		device_notify(DEVICE_NOTIFIER_PROCESS_BACKGROUND, &pid);
 }
 
 static const struct edbus_method edbus_methods[] = {
-	{ PREDEF_FOREGRD, "sis", "i", dbus_proc_handler },
-	{ PREDEF_BACKGRD, "sis", "i", dbus_proc_handler },
-	{ PREDEF_ACTIVE, "sis", "i", dbus_proc_handler },
-	{ PREDEF_INACTIVE, "sis", "i", dbus_proc_handler },
 	{ OOMADJ_SET, "siss", "i", dbus_oom_handler },
-	{ PROCESS_GROUP_SET, "siss", "i", dbus_oom_handler },
 	{ SIOP_LEVEL_GET, NULL, "i", dbus_get_siop_level },
 	{ REAR_LEVEL_GET, NULL, "i", dbus_get_rear_level },
 	{ SIOP_LEVEL_SET, "ss", "i", dbus_set_siop_level },
@@ -737,11 +383,11 @@ static const struct edbus_method edbus_methods[] = {
 
 static int proc_booting_done(void *data)
 {
-	static int done = 0;
+	static int done;
 
 	if (data == NULL)
 		goto out;
-	done = (int)data;
+	done = *(int *)data;
 	if (vconf_notify_key_changed(VCONFKEY_PM_STATE, (void *)siop_mode_lcd, NULL) < 0)
 		_E("Vconf notify key chaneged failed: KEY(%s)", VCONFKEY_PM_STATE);
 	siop_mode_lcd(NULL, NULL);
@@ -751,11 +397,10 @@ out:
 
 static int process_execute(void *data)
 {
-	struct siop_data* key_data = (struct siop_data *)data;
+	struct siop_data *key_data = (struct siop_data *)data;
 	int siop_level = 0;
 	int rear_level = 0;
 	int level;
-	int siop_disable;
 	int ret;
 	int booting_done;
 
@@ -809,28 +454,86 @@ static void temp_change_signal_handler(void *data, DBusMessage *msg)
 	device_set_property(DEVICE_TYPE_DISPLAY, PROP_DISPLAY_ELVSS_CONTROL, level);
 }
 
+static void proc_change_lowmemory(keynode_t *key, void *data)
+{
+	int state = 0;
+
+	if (vconf_get_int(VCONFKEY_SYSMAN_LOW_MEMORY, &state))
+		return;
+
+	if (state == VCONFKEY_SYSMAN_LOW_MEMORY_HARD_WARNING)
+		device_notify(DEVICE_NOTIFIER_PMQOS_OOM, (void *)OOM_PMQOS_TIME);
+}
+
+static void uevent_platform_handler(struct udev_device *dev)
+{
+	const char *devpath;
+	const char *siop_level;
+	const char *rear_level;
+	struct siop_data params = {0,};
+
+	devpath = udev_device_get_devpath(dev);
+	if (!devpath)
+		return;
+
+	if (!fnmatch(THERMISTOR_PATH, devpath, 0)) {
+		siop_level = udev_device_get_property_value(dev,
+				"TEMPERATURE");
+		if (!siop_level)
+			params.siop = atoi(siop_level);
+
+		rear_level = udev_device_get_property_value(dev,
+				"REAR_TEMPERATURE");
+		if (!rear_level)
+			params.rear = atoi(rear_level);
+
+		process_execute(&params);
+	}
+}
+
+static struct uevent_handler uh = {
+	.subsystem = PLATFORM_SUBSYSTEM,
+	.uevent_func = uevent_platform_handler,
+};
+
 static void process_init(void *data)
 {
 	int ret;
 
-	register_edbus_signal_handler(DEVICED_PATH_PROCESS, DEVICED_INTERFACE_PROCESS,
-			SIGNAL_NAME_OOMADJ_SET,
-		    dbus_proc_oomadj_set_signal_handler);
+	register_edbus_signal_handler(RESOURCED_PATH_PROCESS,
+	    RESOURCED_INTERFACE_PROCESS, SIGNAL_PROC_STATUS, proc_signal_handler);
+
 	register_edbus_signal_handler(TEMPERATURE_DBUS_PATH, TEMPERATURE_DBUS_INTERFACE,
 			TEMPERATURE_DBUS_SIGNAL,
 		    temp_change_signal_handler);
+
+	ret = register_kernel_uevent_control(&uh);
+	if (ret < 0)
+		_E("fail to register platform uevent : %d", ret);
 
 	ret = register_edbus_method(DEVICED_PATH_PROCESS, edbus_methods, ARRAY_SIZE(edbus_methods));
 	if (ret < 0)
 		_E("fail to init edbus method(%d)", ret);
 
 	register_notifier(DEVICE_NOTIFIER_BOOTING_DONE, proc_booting_done);
+
+	vconf_notify_key_changed(VCONFKEY_SYSMAN_LOW_MEMORY,
+			proc_change_lowmemory, NULL);
+}
+
+static void process_exit(void *data)
+{
+	int ret;
+
+	ret = unregister_kernel_uevent_control(&uh);
+	if (ret < 0)
+		_E("fail to unregister platform uevent : %d", ret);
 }
 
 static const struct device_ops process_device_ops = {
-	.priority = DEVICE_PRIORITY_NORMAL,
-	.name     = PROC_OPS_NAME,
+	.name     = "process",
 	.init     = process_init,
+	.exit     = process_exit,
 	.execute  = process_execute,
 };
 

@@ -22,18 +22,19 @@
 #include "device-notifier.h"
 #include "list.h"
 #include "common.h"
-#include <journal/system.h>
 
-#define LATE_INIT_WAIT_TIME	12
+#define LATE_INIT_WAIT_TIME	30
 #define DEFAULT_LATE_INIT_VALUE	((Ecore_Timer *)0x0DEF0DEF)
 
 struct device_notifier {
+	bool deleted;
 	enum device_notifier_type status;
 	int (*func)(void *data);
 };
 
 static dd_list *device_notifier_list;
 static Ecore_Timer *late_init_timer = DEFAULT_LATE_INIT_VALUE;
+static Ecore_Idler *idl;
 
 #define FIND_NOTIFIER(a, b, d, e, f) \
 	DD_LIST_FOREACH(a, b, d) \
@@ -42,7 +43,7 @@ static Ecore_Timer *late_init_timer = DEFAULT_LATE_INIT_VALUE;
 int register_notifier(enum device_notifier_type status, int (*func)(void *data))
 {
 	dd_list *n;
-	struct device_notifier *data, *notifier;
+	struct device_notifier *notifier;
 
 	_I("%d, %x", status, func);
 
@@ -57,7 +58,7 @@ int register_notifier(enum device_notifier_type status, int (*func)(void *data))
 		return -EINVAL;
 	}
 
-	notifier = malloc(sizeof(struct device_notifier));
+	notifier = calloc(1, sizeof(struct device_notifier));
 	if (!notifier) {
 		_E("Fail to malloc for notifier!");
 		return -ENOMEM;
@@ -83,27 +84,43 @@ int unregister_notifier(enum device_notifier_type status, int (*func)(void *data
 
 	FIND_NOTIFIER(device_notifier_list, n, notifier, status, func) {
 		_I("[%d, %x]", status, func);
-		DD_LIST_REMOVE(device_notifier_list, notifier);
-		free(notifier);
+		notifier->deleted = true;
 	}
 
 	return 0;
 }
 
-void device_notify(enum device_notifier_type status, void *data)
+static Eina_Bool delete_unused_notifier_cb(void *data)
 {
-	dd_list *n, *next;
+	dd_list *n;
+	dd_list *next;
 	struct device_notifier *notifier;
-	int cnt = 0;
 
 	DD_LIST_FOREACH_SAFE(device_notifier_list, n, next, notifier) {
-		if (status == notifier->status) {
-			if (notifier->func) {
-				notifier->func(data);
-				cnt++;
-			}
+		if (notifier->deleted) {
+			DD_LIST_REMOVE_LIST(device_notifier_list, n);
+			free(notifier);
 		}
 	}
+
+	idl = NULL;
+	return ECORE_CALLBACK_CANCEL;
+}
+
+void device_notify(enum device_notifier_type status, void *data)
+{
+	dd_list *n;
+	struct device_notifier *notifier;
+
+	DD_LIST_FOREACH(device_notifier_list, n, notifier) {
+		if (!notifier->deleted && status == notifier->status) {
+			if (notifier->func)
+				notifier->func(data);
+		}
+	}
+
+	if (!idl)
+		idl = ecore_idler_add(delete_unused_notifier_cb, NULL);
 }
 
 static void late_init_stop(void)
@@ -117,13 +134,12 @@ static void late_init_stop(void)
 
 static int booting_done(void *data)
 {
-	static int done = 0;
+	static int done;
 
 	if (data == NULL)
 		goto out;
 
-	journal_system_booting_done();
-	done = (int)data;
+	done = *(int *)data;
 	if (late_init_timer == NULL)
 		return done;
 	late_init_stop();
@@ -140,7 +156,7 @@ static Eina_Bool late_init_timer_cb(void *data)
 	if (done)
 		return EINA_FALSE;
 	_I("late booting done");
-	device_notify(DEVICE_NOTIFIER_BOOTING_DONE, (void *)TRUE);
+	device_notify(DEVICE_NOTIFIER_BOOTING_DONE, &done);
 	return EINA_FALSE;
 }
 
@@ -171,7 +187,6 @@ static void device_notifier_exit(void *data)
 }
 
 static const struct device_ops notifier_device_ops = {
-	.priority = DEVICE_PRIORITY_NORMAL,
 	.name     = "notifier",
 	.init     = device_notifier_init,
 	.exit     = device_notifier_exit,

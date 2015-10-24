@@ -20,12 +20,5 @@
 #ifndef __PROC_HANDLER_H__
 #define __PROC_HANDLER_H__
 
-#include "shared/score-defines.h"
-
-#define PROC_OPS_NAME	"process"
-
-int get_oom_score_adj(int pid, int *oom_score_adj);
-int set_oom_score_adj(int pid, int new_oom_score_adj);
-void check_siop_disable_process(int pid, char *default_name);
 int cur_siop_level(void);
 #endif /* __PROC_HANDLER_H__ */

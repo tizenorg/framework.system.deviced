@@ -21,20 +21,39 @@
 #include "core/log.h"
 #include "core/devices.h"
 #include "core/launch.h"
+#include "extcon/extcon.h"
+#include "apps/apps.h"
 #include "usb-client.h"
 
 #define BUF_MAX 256
 
-#define TICKER_TYPE_DEFAULT "usb-client-default"
-#define TICKER_TYPE_SSH     "usb-client-ssh"
+#define MSG_DEFAULT "USBClient"
+#define MSG_SSH     "USBClientSSH"
+#define MTP_PROCESS_NAME "/usr/bin/mtp-responder"
 
-#ifdef TIZEN_ENGINEER_MODE
-const static bool eng_mode = true;
-#else
-const static bool eng_mode = false;
-#endif
+#define MTP_PROCESS_WAIT_TIMER	(0.5)
 
-static int debug = 0;
+static int debug;
+static Ecore_Timer *mtp_launch_timer;
+
+static Eina_Bool mtp_launch_cb(void *data)
+{
+	int ret;
+
+	ret = launch_app_cmd(MTP_PROCESS_NAME);
+	_I("operation: %s(%d)", MTP_PROCESS_NAME, ret);
+
+	return EINA_FALSE;
+}
+
+static void mtp_launch_timer_start(void)
+{
+	_D("wait");
+	mtp_launch_timer = ecore_timer_add(MTP_PROCESS_WAIT_TIMER,
+				mtp_launch_cb, NULL);
+	if (mtp_launch_timer == NULL)
+		_E("fail to add battery init timer during booting");
+}
 
 static int write_sysfs(char *path, char *value)
 {
@@ -63,7 +82,7 @@ static int write_sysfs(char *path, char *value)
 	}
 
 	if (fclose(fp) != 0)
-		_E("FAIL: fclose()");
+		_E("FAIL: fclose(errno:%d)", errno);
 	return ret;
 }
 
@@ -102,9 +121,13 @@ static void run_operations_for_usb_mode(dd_list *list)
 	struct usb_operation *oper;
 
 	if (!list)
-		return ;
+		return;
 
 	DD_LIST_FOREACH(list, l, oper) {
+	/*	if (strncmp(oper->oper, MTP_PROCESS_NAME, strlen(oper->oper)) == 0) {
+			mtp_launch_timer_start();
+			continue;
+		}*/
 		ret = launch_app_cmd(oper->oper);
 		_I("operation: %s(%d)", oper->oper, ret);
 	}
@@ -119,8 +142,15 @@ void unset_client_mode(int mode, bool change)
 	if (!change)
 		update_current_usb_mode(SET_USB_NONE);
 
-	if (update_usb_state(VCONFKEY_SYSMAN_USB_DISCONNECTED) < 0)
-		_E("FAIL: update_usb_state(%d)", VCONFKEY_SYSMAN_USB_DISCONNECTED);
+	terminate_noti();
+
+	ret = make_operation_list(mode, USB_CON_STOP);
+	if (ret == 0) {
+		ret = get_operations_list(&oper_list);
+		if (ret == 0)
+			run_operations_for_usb_mode(oper_list);
+	}
+	release_operations_list();
 
 	ret = make_configuration_list(SET_USB_NONE);
 	if (ret == 0) {
@@ -132,14 +162,43 @@ void unset_client_mode(int mode, bool change)
 		}
 	}
 	release_configuration_list();
+}
 
-	ret = make_operation_list(mode, USB_CON_STOP);
-	if (ret == 0) {
-		ret = get_operations_list(&oper_list);
-		if (ret == 0)
-			run_operations_for_usb_mode(oper_list);
+static void show_message_post(int cur_mode, int sel_mode)
+{
+	int cradle = DOCK_NONE;
+
+	cradle = extcon_get_status(EXTCON_CABLE_DOCK);
+	if (cradle > 0)
+		return;
+
+	switch (sel_mode) {
+	case SET_USB_DEFAULT:
+	case SET_USB_SDB:
+	case SET_USB_SDB_DIAG:
+		if (cur_mode == SET_USB_DEFAULT
+				|| cur_mode == SET_USB_SDB
+				|| cur_mode == SET_USB_SDB_DIAG)
+			return;
+
+		launch_message_post(MSG_DEFAULT);
+		break;
+	case SET_USB_RNDIS:
+	case SET_USB_RNDIS_DIAG:
+	case SET_USB_RNDIS_SDB:
+		if (cur_mode == SET_USB_RNDIS
+				|| cur_mode == SET_USB_RNDIS_TETHERING
+				|| cur_mode == SET_USB_RNDIS_DIAG
+				|| cur_mode == SET_USB_RNDIS_SDB)
+			return;
+
+		launch_message_post(MSG_SSH);
+		break;
+	case SET_USB_NONE:
+	case SET_USB_RNDIS_TETHERING:
+	default:
+		break;
 	}
-	release_operations_list();
 }
 
 static int get_selected_mode_by_debug_mode(int mode)
@@ -170,8 +229,8 @@ static bool get_usb_tethering_state(void)
 	int state;
 	int ret;
 
-	if (vconf_get_int(VCONFKEY_MOBILE_HOTSPOT_MODE, &state) == 0
-			&& (state & VCONFKEY_MOBILE_HOTSPOT_MODE_USB)) {
+	ret = get_mobile_hotspot_mode(&state);
+	if (!ret && (state & VCONFKEY_MOBILE_HOTSPOT_MODE_USB)) {
 		_I("USB tethering is on");
 		return true;
 	}
@@ -215,7 +274,7 @@ static int check_first_eng_mode(int sel_mode)
 {
 	static bool first = true;
 
-	if (!eng_mode || !first)
+	if (!eng_mode() || !first)
 		return sel_mode;
 
 	first = false;
@@ -246,7 +305,6 @@ static int decide_selected_mode(int sel_mode, int cur_mode)
 	}
 
 	_I("Selected mode decided is (%d)", mode);
-
 	return mode;
 }
 
@@ -261,7 +319,7 @@ void change_client_setting(int options)
 	dd_list *oper_list;
 
 	if (control_status() == DEVICE_OPS_STATUS_STOP) {
-		launch_syspopup(USB_RESTRICT);
+		launch_restrict_popup();
 		return;
 	}
 
@@ -277,9 +335,8 @@ void change_client_setting(int options)
 	}
 
 	if (options & SET_CONFIGURATION) {
-		if (cur_mode != SET_USB_NONE) {
+		if (cur_mode != SET_USB_NONE)
 			unset_client_mode(cur_mode, true);
-		}
 
 		ret = make_configuration_list(sel_mode);
 		if (ret < 0) {
@@ -313,8 +370,7 @@ void change_client_setting(int options)
 			goto out;
 		}
 
-		if (update_usb_state(VCONFKEY_SYSMAN_USB_AVAILABLE) < 0)
-			_E("FAIL: update_usb_state(%d)", VCONFKEY_SYSMAN_USB_AVAILABLE);
+		update_usb_state(USB_STATE_AVAILABLE);
 
 		update_current_usb_mode(sel_mode);
 
@@ -322,7 +378,8 @@ void change_client_setting(int options)
 	}
 
 	if (options & SET_NOTIFICATION) {
-		/* Do nothing */
+		show_message_post(cur_mode, sel_mode);
+		show_noti();
 	}
 
 	ret = 0;
@@ -337,17 +394,20 @@ out:
 	return;
 }
 
-void client_mode_changed(keynode_t* key, void *data)
+void client_mode_changed(keynode_t *key, void *data)
 {
 	int ret;
 
 	if (get_wait_configured())
 		return;
 
+	if (charge_only_mode(false))
+		return;
+
 	change_client_setting(SET_CONFIGURATION | SET_OPERATION | SET_NOTIFICATION);
 }
 
-void debug_mode_changed(keynode_t* key, void *data)
+void debug_mode_changed(keynode_t *key, void *data)
 {
 	int new_debug;
 	int cur_mode;
@@ -374,13 +434,39 @@ void debug_mode_changed(keynode_t* key, void *data)
 			sel_mode = SET_USB_SDB;
 		break;
 	default:
-		return ;
+		return;
 	}
 
 	if (change_selected_usb_mode(sel_mode) != 0)
 		_E("FAIL: change_selected_usb_mode(%d)", sel_mode);
 
 	return;
+}
+
+/* charging only mode */
+void charge_only_changed(keynode_t *key, void *data)
+{
+	int ret;
+	bool prev, curr;
+	static bool init;
+
+	ret = get_current_usb_physical_state();
+	if (ret == 0)
+		return;
+
+	prev = charge_only_mode(false);
+	curr = charge_only_mode(true);
+
+	if (prev == curr)
+		return;
+
+	if (curr) {
+		_I("Charge only mode");
+		act_usb_disconnected();
+	} else {
+		_I("Not charge only mode");
+		act_usb_connected();
+	}
 }
 
 /* USB tethering */
@@ -425,7 +511,7 @@ static int turn_off_usb_tethering(void)
 
 	cur_mode = get_current_usb_mode();
 
-	switch(cur_mode) {
+	switch (cur_mode) {
 	case SET_USB_RNDIS:
 	case SET_USB_RNDIS_TETHERING:
 		sel_mode = get_default_mode();
@@ -439,7 +525,7 @@ static int turn_off_usb_tethering(void)
 	}
 }
 
-void tethering_status_changed(keynode_t* key, void *data)
+void tethering_status_changed(void)
 {
 	bool usb_tethering;
 	int ret;

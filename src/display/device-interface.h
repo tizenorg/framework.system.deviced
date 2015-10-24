@@ -34,6 +34,7 @@
 #define PM_MAX_BRIGHTNESS       100
 #define PM_MIN_BRIGHTNESS       1
 #define PM_DEFAULT_BRIGHTNESS	60
+#define PM_DIM_BRIGHTNESS	0
 
 #define PM_LCD_POWER_ON		0
 #define PM_LCD_POWER_OFF	4
@@ -57,6 +58,19 @@ enum {
 extern int init_sysfs(unsigned int);
 extern int exit_sysfs(void);
 
+typedef struct _PMSys PMSys;
+struct _PMSys {
+	int def_brt;
+	int dim_brt;
+
+	int (*sys_power_state) (PMSys *, int);
+	int (*sys_power_lock) (PMSys *, int);
+	int (*sys_get_power_lock_support) (PMSys *);
+	int (*sys_get_lcd_power) (PMSys *);
+	int (*bl_onoff) (PMSys *, int, enum device_flags);
+	int (*bl_brt) (PMSys *, int, int);
+};
+
 struct _backlight_ops {
 	int (*off)(enum device_flags);
 	int (*dim)(void);
@@ -66,11 +80,14 @@ struct _backlight_ops {
 	int (*hbm_off)(void);
 	int (*set_default_brt)(int level);
 	int (*get_lcd_power)(void);
+	int (*set_current_brightness)(int level);
+	int (*get_current_brightness)(void);
 	int (*set_custom_status)(bool on);
 	bool (*get_custom_status)(void);
 	int (*save_custom_brightness)(void);
 	int (*custom_update)(void);
 	int (*set_force_brightness)(int level);
+	int (*blink)(int timeout);
 };
 
 struct _power_ops {

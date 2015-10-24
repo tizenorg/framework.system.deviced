@@ -38,10 +38,11 @@
 #define LOWBT_FLAG		0x00000100
 #define CHRGR_FLAG		0x00000200
 #define PWRSV_FLAG		0x00000400
-#define SMAST_FLAG		0x00001000
+#define SMARTSTAY_FLAG		0x00001000
 #define BRTCH_FLAG		0x00002000
 #define PWROFF_FLAG		0x00004000
 #define DIMSTAY_FLAG		0x00008000
+#define EXTBRT_FLAG		0x00010000
 
 #define DEFAULT_NORMAL_TIMEOUT	30000
 #define DEFAULT_DIM_TIMEOUT	5000
@@ -50,9 +51,6 @@
 #define MASK32			0xffffffff
 
 #define CHECK_OPS(d, op) (d != NULL && d->op != NULL)
-
-#ifdef ENABLE_PM_LOG
-#define MAX_LOG_COUNT 250
 
 enum pm_log_type {
 	PM_LOG_MIN = 0,
@@ -68,9 +66,6 @@ enum pm_log_type {
 	PM_LOG_SLEEP,
 	PM_LOG_MAX
 };
-
-void pm_history_save(enum pm_log_type, int);
-#endif
 
 extern unsigned int pm_status_flag;
 
@@ -123,6 +118,9 @@ struct display_config {
 	int alpm_on;
 	int accel_sensor_on;
 	int continuous_sampling;
+	int default_brightness;
+	int lcdon_direct;
+	int phased_delay;
 };
 
 /*
@@ -137,8 +135,9 @@ extern struct display_config display_conf;
 struct display_function_info {
 	void (*update_auto_brightness)(bool);
 	int (*set_autobrightness_min)(int, char *);
-	int (*reset_autobrightness_min)(char *, enum watch_id);
+	void (*reset_autobrightness_min)(const char *, void *data);
 	int (*face_detection)(int, int, int);
+	void (*set_brightness_level)(int);
 };
 
 extern struct display_function_info display_info;
@@ -146,7 +145,7 @@ extern struct display_function_info display_info;
 struct display_keyfilter_ops {
 	void (*init)(void);
 	void (*exit)(void);
-	int (*check)(int, char[], int);
+	int (*check)(void *, int);
 	void (*set_powerkey_ignore)(int);
 	int (*powerkey_lcdoff)(void);
 	void (*backlight_enable)(bool);
@@ -160,7 +159,7 @@ int trans_condition;
 pid_t idle_pid;
 int check_processes(enum state_t prohibit_state);
 extern struct state state[S_END];
-int reset_lcd_timeout(char *name, enum watch_id id);
+void reset_lcd_timeout(const char *sender, void *data);
 int check_lcdoff_lock_state(void);
 /**
  * @}

@@ -21,6 +21,7 @@
 #define __DBUS_H__
 
 #include <dbus/dbus.h>
+#include <stdarg.h>
 
 /*
  * Template
@@ -33,6 +34,13 @@
 #define XXX_SIGNAL_ZZZ                      "ZZZ"
 #define XXX_METHOD_ZZZ                      "ZZZ"
  */
+
+/*
+ * DBus daemon
+ */
+#define DBUS_BUS_NAME                       "org.freedesktop.DBus"
+#define DBUS_OBJECT_PATH                    "/org/freedesktop/DBus"
+#define DBUS_INTERFACE_NAME                 DBUS_BUS_NAME
 
 /*
  * Device daemon
@@ -73,6 +81,12 @@
 /* Led service: play/stop led operations about led */
 #define DEVICED_PATH_LED                    DEVICED_OBJECT_PATH"/Led"
 #define DEVICED_INTERFACE_LED               DEVICED_INTERFACE_NAME".Led"
+/* Block service: manage block device */
+#define DEVICED_PATH_BLOCK                  DEVICED_OBJECT_PATH"/Block"
+#define DEVICED_PATH_BLOCK_DEVICES          DEVICED_PATH_BLOCK"/Devices"
+#define DEVICED_PATH_BLOCK_MANAGER          DEVICED_PATH_BLOCK"/Manager"
+#define DEVICED_INTERFACE_BLOCK             DEVICED_INTERFACE_NAME".Block"
+#define DEVICED_INTERFACE_BLOCK_MANAGER     DEVICED_INTERFACE_NAME".BlockManager"
 /* MMC service: mount/unmount/format mmc operations about mmc */
 #define DEVICED_PATH_MMC                    DEVICED_OBJECT_PATH"/Mmc"
 #define DEVICED_INTERFACE_MMC               DEVICED_INTERFACE_NAME".Mmc"
@@ -109,12 +123,9 @@
 /* Time service */
 #define DEVICED_PATH_TIME                DEVICED_OBJECT_PATH"/Time"
 #define DEVICED_INTERFACE_TIME           DEVICED_INTERFACE_NAME".Time"
-/* Board service */
-#define DEVICED_PATH_BOARD                DEVICED_OBJECT_PATH"/Board"
-#define DEVICED_INTERFACE_BOARD           DEVICED_INTERFACE_NAME".Board"
-/* Testmode service */
-#define DEVICED_PATH_TESTMODE               DEVICED_OBJECT_PATH"/Testmode"
-#define DEVICED_INTERFACE_TESTMODE           DEVICED_INTERFACE_NAME".Testmode"
+/* Bluetooth service: Turn On/Off bluetooth device */
+#define DEVICED_PATH_BLUETOOTH              DEVICED_OBJECT_PATH"/Bluetooth"
+#define DEVICED_INTERFACE_BLUETOOTH         DEVICED_INTERFACE_NAME".bluetooth"
 
 /* Apps service */
 #define DEVICED_PATH_APPS               DEVICED_OBJECT_PATH"/Apps"
@@ -127,6 +138,10 @@
 /* HDMICEC service: status check about gpio */
 #define DEVICED_PATH_HDMICEC                    DEVICED_OBJECT_PATH"/HdmiCec"
 #define DEVICED_INTERFACE_HDMICEC               DEVICED_INTERFACE_NAME".HdmiCec"
+
+/* Tzip service: Archive file system */
+#define DEVICED_PATH_TZIP                    DEVICED_OBJECT_PATH"/Tzip"
+#define DEVICED_INTERFACE_TZIP               DEVICED_INTERFACE_NAME".Tzip"
 
 /*
  * Resource daemon
@@ -148,9 +163,9 @@
 /* LED */
 #define POPUP_PATH_LED                      POPUP_OBJECT_PATH"/Led"
 #define POPUP_INTERFACE_LED                 POPUP_INTERFACE_NAME".Led"
-/* TICKER */
-#define POPUP_PATH_TICKER                   POPUP_OBJECT_PATH"/Ticker"
-#define POPUP_INTERFACE_TICKER              POPUP_INTERFACE_NAME".Ticker"
+/* Notification */
+#define POPUP_PATH_NOTI                     POPUP_OBJECT_PATH"/Noti"
+#define POPUP_INTERFACE_NOTI                POPUP_INTERFACE_NAME".Noti"
 /* Power off */
 #define POPUP_PATH_POWEROFF                 POPUP_OBJECT_PATH"/Poweroff"
 #define POPUP_INTERFACE_POWEROFF            POPUP_INTERFACE_NAME".Poweroff"
@@ -206,6 +221,23 @@
 #define CRASHD_PATH_CRASH                   CRASHD_OBJECT_PATH"/Crash"
 #define CRASHD_INTERFACE_CRASH              CRASHD_INTERFACE_NAME".Crash"
 
+/*
+ * dump service
+ */
+#define DUMP_SERVICE_BUS_NAME               "org.tizen.system.dumpservice"
+#define DUMP_SERVICE_OBJECT_PATH            "/Org/Tizen/System/DumpService"
+#define DUMP_SERVICE_INTERFACE_NAME         DUMP_SERVICE_BUS_NAME
+
+/*
+ * Coord daemon
+ */
+#define COORD_BUS_NAME                     "org.tizen.system.coord"
+#define COORD_OBJECT_PATH                  "/Org/Tizen/System/Coord"
+#define COORD_INTERFACE_NAME               COORD_BUS_NAME
+
+#define COORD_PATH_AUTOBRIGHTNESS          COORD_OBJECT_PATH"/Autobrightness"
+#define COORD_INTERFACE_AUTOBRIGHTNESS     COORD_INTERFACE_NAME".autobrightness"
+
 struct dbus_byte {
 	const char *data;
 	int size;
@@ -224,6 +256,10 @@ int dbus_method_sync(const char *dest, const char *path,
 int dbus_method_sync_timeout(const char *dest, const char *path,
 		const char *interface, const char *method,
 		const char *sig, char *param[], int timeout);
+
+int dbus_method_sync_pairs(const char *dest, const char *path,
+		const char *interface, const char *method,
+		int num, va_list args);
 
 int dbus_method_async(const char *dest, const char *path,
 		const char *interface, const char *method,

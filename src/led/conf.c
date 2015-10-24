@@ -31,7 +31,7 @@
 #define LED_CONF	"/etc/deviced/led.conf"
 #define LED_STR		"led"
 
-static const char* led_str[] = {
+static const char *led_str[] = {
 	[LED_OFF] = "Off",
 	[LED_LOW_BATTERY] = "Low battery",
 	[LED_CHARGING] = "Charging",
@@ -63,7 +63,7 @@ static int get_selected_lcd_mode(const char *value)
 
 static int parse_scenario(struct parse_result *result, void *user_data)
 {
-	dd_list *head = (dd_list*)led_head;
+	dd_list *head = (dd_list *)led_head;
 	struct led_mode *led;
 	int index;
 
@@ -82,9 +82,9 @@ static int parse_scenario(struct parse_result *result, void *user_data)
 	/* If there is no matched data */
 	if (!led) {
 		/* allocate led_data memory */
-		led = (struct led_mode*)calloc(1, sizeof(struct led_mode));
+		led = (struct led_mode *)calloc(1, sizeof(struct led_mode));
 		if (!led) {
-			_E("out of memory : %s", strerror(errno));
+			_E("out of memory : %d", errno);
 			return -errno;
 		}
 

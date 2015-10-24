@@ -24,35 +24,67 @@
 #include <string.h>
 #include <sys/wait.h>
 #include <errno.h>
+#include <device-node.h>
 
 #include "core/log.h"
 #include "core/common.h"
+#include "core/devices.h"
+#include "device-interface.h"
 
 #define CMD_ON		"on"
 #define CMD_OFF		"off"
 #define CMD_STANDBY	"standby"
+
+#define GESTURE_STR		"gesture"
+#define POWER_KEY_STR		"powerkey"
+#define TOUCH_STR		"touch"
+#define EVENT_STR		"event"
+#define UNKNOWN_STR		"unknown"
+
 
 static const char *xset_arg[] = {
 	"/usr/bin/xset",
 	"dpms", "force", NULL, NULL,
 };
 
-static int pm_x_set_lcd_backlight(struct _PMSys *p, int on)
+static void save_display_on(enum device_flags flags)
+{
+	char *str;
+
+	if (flags & LCD_ON_BY_GESTURE)
+		str = GESTURE_STR;
+	else if (flags & LCD_ON_BY_POWER_KEY)
+		str = POWER_KEY_STR;
+	else if (flags & LCD_ON_BY_EVENT)
+		str = EVENT_STR;
+	else if (flags & LCD_ON_BY_TOUCH)
+		str = TOUCH_STR;
+	else
+		str = UNKNOWN_STR;
+}
+
+static int pm_x_set_lcd_backlight(struct _PMSys *p, int on, enum device_flags flags)
 {
 	pid_t pid;
 	char cmd_line[8];
 	int argc;
-
-	_D("Backlight on=%d", on);
+	static int on_count, off_count, standby_count;
 
 	switch (on) {
 	case STATUS_ON:
+		save_display_on(flags);
+		on_count++;
+		_I("Backlight %s: %d", CMD_ON, on_count);
 		snprintf(cmd_line, sizeof(cmd_line), "%s", CMD_ON);
 		break;
 	case STATUS_OFF:
+		off_count++;
+		_I("Backlight %s: %d", CMD_OFF, off_count);
 		snprintf(cmd_line, sizeof(cmd_line), "%s", CMD_OFF);
 		break;
 	case STATUS_STANDBY:
+		standby_count++;
+		_I("Backlight %s: %d", CMD_STANDBY, standby_count);
 		snprintf(cmd_line, sizeof(cmd_line), "%s", CMD_STANDBY);
 		break;
 	}

@@ -27,8 +27,9 @@
 #include <unistd.h>
 #include <limits.h>
 #include <math.h>
-#include <journal/display.h>
+#include <time.h>
 
+#include "core/edbus-handler.h"
 #include "core/log.h"
 #include "core/devices.h"
 #include "util.h"
@@ -41,23 +42,11 @@
 #define TOUCH_ON	1
 #define TOUCH_OFF	0
 
-#define LCD_PHASED_MIN_BRIGHTNESS	1
+#define LCD_PHASED_MIN_BRIGHTNESS	20
 #define LCD_PHASED_MAX_BRIGHTNESS	100
 #define LCD_PHASED_CHANGE_STEP		5
-#define LCD_PHASED_DELAY		35000 /* microsecond */
 
-typedef struct _PMSys PMSys;
-struct _PMSys {
-	int def_brt;
-	int dim_brt;
-
-	int (*sys_power_state) (PMSys *, int);
-	int (*sys_power_lock) (PMSys *, int);
-	int (*sys_get_power_lock_support) (PMSys *);
-	int (*sys_get_lcd_power) (PMSys *);
-	int (*bl_onoff) (PMSys *, int);
-	int (*bl_brt) (PMSys *, int, int);
-};
+#define SIGNAL_CURRENT_BRIGHTNESS	"CurrentBrightness"
 
 static PMSys *pmsys;
 struct _backlight_ops backlight_ops;
@@ -65,15 +54,16 @@ struct _power_ops power_ops;
 
 #ifdef ENABLE_X_LCD_ONOFF
 #include "x-lcd-on.c"
-static bool x_dpms_enable = false;
+static bool x_dpms_enable;
 #endif
 
 static int power_lock_support = -1;
-static bool custom_status = false;
-static int custom_brightness = 0;
-static int force_brightness = 0;
+static int current_brightness = PM_MAX_BRIGHTNESS;
+static bool custom_status;
+static int custom_brightness;
+static int force_brightness;
 
-static int _bl_onoff(PMSys *p, int on)
+static int _bl_onoff(PMSys *p, int on, enum device_flags flags)
 {
 	int cmd;
 
@@ -86,9 +76,12 @@ static int _bl_brt(PMSys *p, int brightness, int delay)
 	int ret = -1;
 	int cmd;
 	int prev;
+	struct timespec time = {0,};
 
-	if (delay > 0)
-		usleep(delay);
+	if (delay > 0) {
+		time.tv_nsec = delay * NANO_SECOND_MULTIPLIER;
+		nanosleep(&time, NULL);
+	}
 
 	if (force_brightness > 0 && brightness != p->dim_brt) {
 		_I("brightness(%d), force brightness(%d)",
@@ -99,10 +92,8 @@ static int _bl_brt(PMSys *p, int brightness, int delay)
 	cmd = DISP_CMD(PROP_DISPLAY_BRIGHTNESS, DEFAULT_DISPLAY);
 	ret = device_get_property(DEVICE_TYPE_DISPLAY, cmd, &prev);
 
-	/* Update new brightness to vconf */
-	if (!ret && (brightness != prev)) {
-		vconf_set_int(VCONFKEY_PM_CURRENT_BRIGHTNESS, brightness);
-	}
+	if (!ret && (brightness != prev))
+		backlight_ops.set_current_brightness(brightness);
 
 	/* Update device brightness */
 	ret = device_set_property(DEVICE_TYPE_DISPLAY, cmd, brightness);
@@ -161,7 +152,7 @@ static int _sys_get_lcd_power(PMSys *p)
 static void _init_bldev(PMSys *p, unsigned int flags)
 {
 	int ret;
-	//_update_curbrt(p);
+
 	p->bl_brt = _bl_brt;
 	p->bl_onoff = _bl_onoff;
 #ifdef ENABLE_X_LCD_ONOFF
@@ -176,8 +167,7 @@ static void _init_pmsys(PMSys *p)
 {
 	char *val;
 
-	val = getenv("PM_SYS_DIMBRT");
-	p->dim_brt = (val ? atoi(val) : 0);
+	p->dim_brt = PM_DIM_BRIGHTNESS;
 	p->sys_power_state = _sys_power_state;
 	p->sys_power_lock = _sys_power_lock;
 	p->sys_get_power_lock_support = _sys_get_power_lock_support;
@@ -197,7 +187,7 @@ static void *_system_suspend_cb(void *data)
 	if (ret < 0)
 		_E("Failed to system suspend! %d", ret);
 
-	return (void *)ret;
+	return NULL;
 }
 
 static int system_suspend(void)
@@ -205,10 +195,10 @@ static int system_suspend(void)
 	pthread_t pth;
 	int ret;
 
-	ret = pthread_create(&pth, 0, _system_suspend_cb, (void*)NULL);
+	ret = pthread_create(&pth, 0, _system_suspend_cb, (void *)NULL);
 	if (ret < 0) {
 		_E("pthread creation failed!, suspend directly!");
-		_system_suspend_cb((void*)NULL);
+		_system_suspend_cb((void *)NULL);
 	} else {
 		pthread_join(pth, NULL);
 	}
@@ -277,24 +267,26 @@ static int system_get_power_lock_support(void)
 
 static int get_lcd_power(void)
 {
-	if (pmsys && pmsys->sys_get_lcd_power) {
+	if (pmsys && pmsys->sys_get_lcd_power)
 		return pmsys->sys_get_lcd_power(pmsys);
-	}
 
 	return -1;
 }
 
 static int backlight_hbm_off(void)
 {
-#ifdef MICRO_DD
-	return -EINVAL;
-#else
 	int ret, state;
+	static bool support = true;
+
+	if (!support)
+		return -EIO;
 
 	ret = device_get_property(DEVICE_TYPE_DISPLAY,
 	    PROP_DISPLAY_HBM_CONTROL, &state);
-	if (ret < 0)
+	if (ret < 0) {
+		support = false;
 		return ret;
+	}
 
 	if (state) {
 		ret = device_set_property(DEVICE_TYPE_DISPLAY,
@@ -304,7 +296,6 @@ static int backlight_hbm_off(void)
 		_D("hbm is off!");
 	}
 	return 0;
-#endif
 }
 void change_brightness(int start, int end, int step)
 {
@@ -340,7 +331,7 @@ void change_brightness(int start, int end, int step)
 		    (val < 0 && start < end))
 			start = end;
 
-		pmsys->bl_brt(pmsys, start, LCD_PHASED_DELAY);
+		pmsys->bl_brt(pmsys, start, display_conf.phased_delay);
 	}
 }
 
@@ -355,17 +346,12 @@ static int backlight_on(enum device_flags flags)
 		return -1;
 
 	for (i = 0; i < PM_LCD_RETRY_CNT; i++) {
-		ret = pmsys->bl_onoff(pmsys, STATUS_ON);
+		ret = pmsys->bl_onoff(pmsys, STATUS_ON, flags);
 		if (get_lcd_power() == PM_LCD_POWER_ON) {
-#ifdef ENABLE_PM_LOG
 			pm_history_save(PM_LOG_LCD_ON, pm_cur_state);
-#endif
-			journal_display_on(pmsys->def_brt);
 			break;
 		} else {
-#ifdef ENABLE_PM_LOG
 			pm_history_save(PM_LOG_LCD_ON_FAIL, pm_cur_state);
-#endif
 #ifdef ENABLE_X_LCD_ONOFF
 			_E("Failed to LCD on, through xset");
 #else
@@ -375,9 +361,11 @@ static int backlight_on(enum device_flags flags)
 		}
 	}
 
-	if (flags & LCD_PHASED_TRANSIT_MODE)
-		change_brightness(LCD_PHASED_MIN_BRIGHTNESS,
-		    pmsys->def_brt, LCD_PHASED_CHANGE_STEP);
+	if (flags & LCD_PHASED_TRANSIT_MODE) {
+		if (pmsys->def_brt > LCD_PHASED_MIN_BRIGHTNESS)
+			change_brightness(LCD_PHASED_MIN_BRIGHTNESS,
+			    pmsys->def_brt, LCD_PHASED_CHANGE_STEP);
+	}
 
 	return ret;
 }
@@ -386,15 +374,18 @@ static int backlight_off(enum device_flags flags)
 {
 	int ret = -1;
 	int i;
+	struct timespec time = {0, 30 * NANO_SECOND_MULTIPLIER};
 
-	_D("LCD off %x", flags);
+	_D("lcdstep : LCD off %x", flags);
 
 	if (!pmsys || !pmsys->bl_onoff)
 		return -1;
 
-	if (flags & LCD_PHASED_TRANSIT_MODE)
-		change_brightness(pmsys->def_brt,
-		    LCD_PHASED_MIN_BRIGHTNESS, LCD_PHASED_CHANGE_STEP);
+	if (flags & LCD_PHASED_TRANSIT_MODE) {
+		if (pmsys->def_brt > LCD_PHASED_MIN_BRIGHTNESS)
+			change_brightness(pmsys->def_brt,
+			    LCD_PHASED_MIN_BRIGHTNESS, LCD_PHASED_CHANGE_STEP);
+	}
 
 	if (flags & AMBIENT_MODE)
 		return 0;
@@ -403,18 +394,14 @@ static int backlight_off(enum device_flags flags)
 #ifdef ENABLE_X_LCD_ONOFF
 		if (x_dpms_enable == false)
 #endif
-			usleep(30000);
-		ret = pmsys->bl_onoff(pmsys, STATUS_OFF);
+			nanosleep(&time, NULL);
+		_D("lcdstep : xset off %x", flags);
+		ret = pmsys->bl_onoff(pmsys, STATUS_OFF, flags);
 		if (get_lcd_power() == PM_LCD_POWER_OFF) {
-#ifdef ENABLE_PM_LOG
 			pm_history_save(PM_LOG_LCD_OFF, pm_cur_state);
-#endif
-			journal_display_off();
 			break;
 		} else {
-#ifdef ENABLE_PM_LOG
 			pm_history_save(PM_LOG_LCD_OFF_FAIL, pm_cur_state);
-#endif
 #ifdef ENABLE_X_LCD_ONOFF
 			_E("Failed to LCD off, through xset");
 #else
@@ -428,17 +415,36 @@ static int backlight_off(enum device_flags flags)
 
 static int backlight_dim(void)
 {
-	int ret = 0;
-	if (pmsys && pmsys->bl_brt) {
+	int ret = -EIO;
+	if (pmsys && pmsys->bl_brt)
 		ret = pmsys->bl_brt(pmsys, pmsys->dim_brt, 0);
-#ifdef ENABLE_PM_LOG
-		if (!ret)
-			pm_history_save(PM_LOG_LCD_DIM, pm_cur_state);
-		else
-			pm_history_save(PM_LOG_LCD_DIM_FAIL, pm_cur_state);
-#endif
-	}
+
+	pm_history_save(ret == 0 ? PM_LOG_LCD_DIM :
+	    PM_LOG_LCD_DIM_FAIL, pm_cur_state);
+
 	return ret;
+}
+
+static int set_current_brightness(int level)
+{
+	char *param[1];
+	char buf[4];
+
+	current_brightness = level;
+
+	snprintf(buf, 4, "%d", current_brightness);
+	param[0] = buf;
+
+	/* broadcast current brightness */
+	broadcast_edbus_signal(DEVICED_PATH_DISPLAY, DEVICED_INTERFACE_DISPLAY,
+	    SIGNAL_CURRENT_BRIGHTNESS, "i", param);
+
+	return 0;
+}
+
+static int get_current_brightness(void)
+{
+	return current_brightness;
 }
 
 static int set_custom_status(bool on)
@@ -505,11 +511,11 @@ static int backlight_update(void)
 		_I("custom brightness mode! brt no updated");
 		return 0;
 	}
-	if ((pm_status_flag & PWRSV_FLAG) && !(pm_status_flag & BRTCH_FLAG)) {
+	if ((pm_status_flag & PWRSV_FLAG) && !(pm_status_flag & BRTCH_FLAG))
 		ret = backlight_dim();
-	} else if (pmsys && pmsys->bl_brt) {
+	else if (pmsys && pmsys->bl_brt)
 		ret = pmsys->bl_brt(pmsys, pmsys->def_brt, 0);
-	}
+
 	return ret;
 }
 
@@ -521,7 +527,7 @@ static int backlight_standby(int force)
 
 	if ((get_lcd_power() == PM_LCD_POWER_ON) || force) {
 		_I("LCD standby");
-		ret = pmsys->bl_onoff(pmsys, STATUS_STANDBY);
+		ret = pmsys->bl_onoff(pmsys, STATUS_STANDBY, 0);
 	}
 
 	return ret;
@@ -539,7 +545,38 @@ static int set_default_brt(int level)
 	return 0;
 }
 
+static Eina_Bool blink_cb(void *data)
+{
+	static bool flag;
 
+	pmsys->bl_brt(pmsys, flag ? PM_MAX_BRIGHTNESS : PM_MIN_BRIGHTNESS, 0);
+
+	flag = !flag;
+
+	return EINA_TRUE;
+}
+
+static int blink(int timeout)
+{
+	static Ecore_Timer *timer;
+
+	if (timer) {
+		ecore_timer_del(timer);
+		timer = NULL;
+	}
+
+	if (timeout < 0)
+		return -EINVAL;
+
+	if (timeout == 0) {
+		backlight_update();
+		return 0;
+	}
+
+	timer = ecore_timer_add(MSEC_TO_SEC((double)timeout), blink_cb, NULL);
+
+	return 0;
+}
 
 static int check_wakeup_src(void)
 {
@@ -559,11 +596,14 @@ void _init_ops(void)
 	backlight_ops.hbm_off = backlight_hbm_off;
 	backlight_ops.set_default_brt = set_default_brt;
 	backlight_ops.get_lcd_power = get_lcd_power;
+	backlight_ops.set_current_brightness = set_current_brightness;
+	backlight_ops.get_current_brightness = get_current_brightness;
 	backlight_ops.set_custom_status = set_custom_status;
 	backlight_ops.get_custom_status = get_custom_status;
 	backlight_ops.save_custom_brightness = save_custom_brightness;
 	backlight_ops.custom_update = custom_backlight_update;
 	backlight_ops.set_force_brightness = set_force_brightness;
+	backlight_ops.blink = blink;
 
 	power_ops.suspend = system_suspend;
 	power_ops.pre_suspend = system_pre_suspend;
@@ -622,7 +662,7 @@ int exit_sysfs(void)
 
 	free(pmsys);
 	pmsys = NULL;
-	if(fd != -1)
+	if (fd != -1)
 		close(fd);
 
 	return 0;

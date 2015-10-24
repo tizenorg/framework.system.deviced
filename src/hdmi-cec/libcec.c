@@ -28,6 +28,7 @@
 #include "cec.h"
 #include "libcec.h"
 #include "core/log.h"
+#include "core/common.h"
 
 #define CEC_DEBUG 1
 
@@ -63,7 +64,7 @@ static struct {
 	unsigned int ui_id;
 } supportkeys[] = {
 	{"Connect",	0x40,	CEC_OPCODE_USER_CONTROL_PRESSED,	KEY_F6},
-	{"Connect",	0x40,	CEC_OPCODE_USER_CONTROL_RELEASED, 	KEY_F6},
+	{"Connect",	0x40,	CEC_OPCODE_USER_CONTROL_RELEASED,	KEY_F6},
 	{"Enter",	0x0,	CEC_OPCODE_USER_CONTROL_PRESSED,	KEY_ENTER},
 	{"Enter",	0x0,	CEC_OPCODE_USER_CONTROL_RELEASED,	KEY_ENTER},
 	{"Up",		0x1,	CEC_OPCODE_USER_CONTROL_PRESSED,	KEY_UP},
@@ -92,14 +93,14 @@ static struct {
 	{"Rewind",	0x48,	CEC_OPCODE_USER_CONTROL_RELEASED,	KEY_REWIND},
 	{"FastForward",	0x49,	CEC_OPCODE_USER_CONTROL_PRESSED,	KEY_FASTFORWARD},
 	{"FastForward",	0x49,	CEC_OPCODE_USER_CONTROL_RELEASED,	KEY_FASTFORWARD},
-	{"TV Standby",	0x36, 	CEC_OPCODE_STANDBY, 			KEY_HOMEPAGE},
+	{"TV Standby",	0x36,	CEC_OPCODE_STANDBY,			KEY_HOMEPAGE},
 	{"TV Routing Change", 0x80, CEC_OPCODE_ROUTING_CHANGE,		KEY_HOMEPAGE},
 };
 
 static int CECSetLogicalAddr(unsigned int laddr);
 
 #ifdef CEC_DEBUG
-inline static void CECPrintFrame(unsigned char *buffer, unsigned int size);
+static inline void CECPrintFrame(unsigned char *buffer, unsigned int size);
 #endif
 
 static int fd = -1;
@@ -114,7 +115,8 @@ int CECOpen()
 	if (fd != -1)
 		CECClose();
 
-	if ((fd = open(CEC_DEVICE_NAME, O_RDWR)) < 0) {
+	fd = open(CEC_DEVICE_NAME, O_RDWR);
+	if (fd < 0) {
 		_E("Can't open %s!\n", CEC_DEVICE_NAME);
 		return -1;
 	}
@@ -233,9 +235,9 @@ int CECSendMessage(unsigned char *buffer, int size)
 	_I("CECSendMessage() : size(%d)", size);
 	CECPrintFrame(buffer, size);
 #else
-	_I("CEC send : 0x%X 0x%X 0x%X 0x%X 0x%X 0x%X 0x%X 0x%X 0x%X 0x%X 0x%X 0x%X 0x%X 0x%X 0x%X 0x%X", 
+	_I("CEC send : 0x%X 0x%X 0x%X 0x%X 0x%X 0x%X 0x%X 0x%X 0x%X 0x%X 0x%X 0x%X 0x%X 0x%X 0x%X 0x%X",
 	buffer[0], buffer[1], buffer[2], buffer[3], buffer[4], buffer[5], buffer[6], buffer[7],
-	buffer[8], buffer[9], buffer[10], buffer[11], buffer[12], buffer[13], buffer[14], buffer[15] );
+	buffer[8], buffer[9], buffer[10], buffer[11], buffer[12], buffer[13], buffer[14], buffer[15]);
 #endif
 	return write(fd, buffer, size);
 }
@@ -276,7 +278,7 @@ int CECReceiveMessage(unsigned char *buffer, int size, long timeout)
 		bytes = read(fd, buffer, size);
 #if CEC_DEBUG
 		_I("CECReceiveMessage() : size(%d)", bytes);
-		if(bytes > 0)
+		if (bytes > 0)
 			CECPrintFrame(buffer, bytes);
 #endif
 	}
@@ -306,7 +308,7 @@ int init_input_key_fd(void)
 
 	if (key_fd < 0) {
 		key_fd = open("/dev/uinput", O_WRONLY | O_NONBLOCK);
-		if(key_fd < 0) {
+		if (key_fd < 0) {
 			_E("open failed");
 			return -1;
 		}
@@ -321,13 +323,13 @@ int init_input_key_fd(void)
 		while (--key_idx >= 0) {
 			if (CEC_OPCODE_USER_CONTROL_PRESSED == supportkeys[key_idx].opcode ||
 			    CEC_OPCODE_VENDOR_REMOTE_BUTTON_DOWN == supportkeys[key_idx].opcode) {
-				ioctl (key_fd, UI_SET_KEYBIT, supportkeys[key_idx].ui_id);
+				ioctl(key_fd, UI_SET_KEYBIT, supportkeys[key_idx].ui_id);
 				_I("register key %s key(%d)",
 					supportkeys[key_idx].key_name,
 					supportkeys[key_idx].ui_id);
 			}
 		}
-		write (key_fd, &uidev, sizeof(uidev)); 
+		write(key_fd, &uidev, sizeof(uidev));
 		ioctl(key_fd, UI_DEV_CREATE);
 	}
 	return 0;
@@ -343,7 +345,7 @@ static int input_key_event(unsigned char opcode, unsigned int key)
 	    opcode != CEC_OPCODE_VENDOR_REMOTE_BUTTON_DOWN &&
 	    opcode != CEC_OPCODE_VENDOR_REMOTE_BUTTON_UP) {
 		_E("unregister key event opcode(0x%X) key(%d)", opcode, key);
-		return -1;	
+		return -1;
 	}
 	memset(&ev, 0, sizeof(ev));
 	ev.type = EV_KEY;
@@ -372,11 +374,12 @@ int CECReportKey(unsigned int key)
 			break;
 		}
 	}
-//	if (ioctl(fd, CEC_IOC_HANDLEKEY, &key)) {
+#if 0
+	if (ioctl(fd, CEC_IOC_HANDLEKEY, &key)) {
 		_E("ioctl(CEC_IOC_HANDLEKEY) failed!");
 		return 0;
-//	}
-
+	}
+#endif
 	return 1;
 }
 
@@ -406,7 +409,6 @@ void CECPrintFrame(unsigned char *buffer, unsigned int size)
  *
  * @return 1 if message should be ignored, otherwise, return 0.
  */
-//TODO: not finished
 int CECIgnoreMessage(unsigned char opcode, unsigned char lsrc)
 {
 	int retval = 0;
@@ -433,7 +435,6 @@ int CECIgnoreMessage(unsigned char opcode, unsigned char lsrc)
  *
  * @return 0 if message should be ignored, otherwise, return 1.
  */
-//TODO: not finished
 int CECCheckMessageSize(unsigned char opcode, int size)
 {
 	int retval = 1;
@@ -488,7 +489,6 @@ int CECCheckMessageSize(unsigned char opcode, int size)
  *
  * @return 0 if message should be ignored, otherwise, return 1.
  */
-//TODO: not finished
 int CECCheckMessageMode(unsigned char opcode, int broadcast)
 {
 	int retval = 1;
@@ -520,7 +520,7 @@ int CECCheckMessageMode(unsigned char opcode, int broadcast)
  * handle key message.
  *
  * @param opcode	[in] opcode.
- * @param key    	[in] received key
+ * @param key		[in] received key
  *
  */
 void CECHandleKey(unsigned char opcode, unsigned char key)
@@ -531,7 +531,7 @@ void CECHandleKey(unsigned char opcode, unsigned char key)
 	while (--key_idx >= 0) {
 		if (opcode == supportkeys[key_idx].opcode &&
 		    key == supportkeys[key_idx].cec_id)
-		break;
+			break;
 	}
 
 	if (key_idx >= 0) {
@@ -540,7 +540,7 @@ void CECHandleKey(unsigned char opcode, unsigned char key)
 		supportkeys[key_idx].key_name, (int)opcode, (int)key, supportkeys[key_idx].ui_id);
 		ret = input_key_event(supportkeys[key_idx].opcode, supportkeys[key_idx].ui_id);
 		if (ret < 0)
-			_E("ioctl(CEC_IOC_HANDLEKEY) failed! (fd %d %d: err[%s])", key_fd, ret, strerror(errno));
+			_E("ioctl(CEC_IOC_HANDLEKEY) failed! (fd %d %d: err[%d])", key_fd, ret, errno);
 	} else {
 		_E("[CEC] 0x%X 0x%X is not supported key\n", opcode, key);
 	}
@@ -559,6 +559,7 @@ void CECOneTouchPlay(unsigned char *buffer, int laddr, int paddr)
 	int size = 0;
 	unsigned char ldst = buffer[0] >> 4;
 	unsigned char opcode = buffer[1];
+	struct timespec time = {0, 500 * NANO_SECOND_MULTIPLIER};
 
 	buffer[0] = (laddr << 4) | ldst;
 	buffer[1] = CEC_OPCODE_TEXT_VIEW_ON;
@@ -569,7 +570,7 @@ void CECOneTouchPlay(unsigned char *buffer, int laddr, int paddr)
 		if (CECSendMessage(buffer, size) != size)
 			_E("CECSendMessage() failed!!!");
 	}
-	usleep(500000);
+	nanosleep(&time, NULL);
 
 	buffer[0] = (laddr << 4) | CEC_MSG_BROADCAST;
 	buffer[1] = CEC_OPCODE_ACTIVE_SOURCE;
@@ -610,7 +611,7 @@ int CECProcessOpcode(unsigned char *buffer, int laddr, int paddr, int raddr)
 		break;
 	case CEC_OPCODE_REQUEST_ACTIVE_SOURCE:
 		_I("[CEC_OPCODE_REQUEST_ACTIVE_SOURCE 0x%X]", opcode);
-		if( raddr != paddr ) {
+		if (raddr != paddr) {
 			_I("Not Currently active source  r:0x0%x  p:0x0%x", raddr, paddr);
 			break;
 		}
@@ -631,7 +632,7 @@ int CECProcessOpcode(unsigned char *buffer, int laddr, int paddr, int raddr)
 		size = 4;
 		_I("Tx : [CEC_OPCODE_ACTIVE_SOURCE 0x%X]", CEC_OPCODE_ACTIVE_SOURCE);
 		break;
-	case CEC_OPCODE_SET_STREAM_PATH:  //11.2.2-3 test
+	case CEC_OPCODE_SET_STREAM_PATH:  /* 11.2.2-3 test */
 		_I("[CEC_OPCODE_SET_STREAM_PATH 0x%X]", opcode);
 		buffer[0] = (laddr << 4) | CEC_MSG_BROADCAST;
 		buffer[1] = CEC_OPCODE_ACTIVE_SOURCE;
@@ -665,7 +666,7 @@ int CECProcessOpcode(unsigned char *buffer, int laddr, int paddr, int raddr)
 		_I("[CEC_OPCODE_VENDOR_COMMAND_WITH_ID 0x%X] : %2X%2X%2X", opcode,
 		buffer[2], buffer[3], buffer[4]);
 		break;
-		case CEC_OPCODE_GET_CEC_VERSION:
+	case CEC_OPCODE_GET_CEC_VERSION:
 		buffer[0] = (laddr << 4) | ldst;
 		buffer[1] = CEC_OPCODE_CEC_VERSION;
 		buffer[2] = 0x05;
@@ -690,7 +691,7 @@ int CECProcessOpcode(unsigned char *buffer, int laddr, int paddr, int raddr)
 		break;
 	case CEC_OPCODE_ROUTING_CHANGE:
 		_I("CEC_OPCODE_ROUTING_CHANGE 0x%X r:0x0%x  p:0x0%x", opcode, raddr, paddr);
-		if(paddr != raddr) {
+		if (paddr != raddr) {
 			CECHandleKey(opcode, buffer[1]);
 			_I("CEC_OPCODE_ROUTING_CHANGE Send HomeKey");
 		}
@@ -729,7 +730,7 @@ int CECProcessOpcode(unsigned char *buffer, int laddr, int paddr, int raddr)
 		buffer[0] = (laddr << 4) | ldst;
 		buffer[1] = CEC_OPCODE_FEATURE_ABORT;
 		buffer[2] = CEC_OPCODE_ABORT;
-		buffer[3] = 0x04; // "refused"
+		buffer[3] = 0x04; /* "refused" */
 		size = 4;
 		break;
 	}

@@ -27,12 +27,12 @@
 #define ENABLE_DLOG
 #endif
 
-#define LOG_TAG "ATR" //AUTO_TESTE_RESULT
+#define LOG_TAG "ATR" /* AUTO_TESTE_RESULT */
 #include "shared/log-macro.h"
 
 #define BUF_MAX 256
 
-void _R (const char *format, ...)
+void _R(const char *format, ...)
 {
 	va_list args;
 	char buf[BUF_MAX];

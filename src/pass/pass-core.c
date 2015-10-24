@@ -322,7 +322,7 @@ static void pass_hotplug_set_online(struct pass_policy *policy,
 	else
 		num_online = hotplug->online;
 
-	for (i = 0 ; i < policy->cpufreq.num_nr_cpus; i++) {
+	for (i = 0; i < policy->cpufreq.num_nr_cpus; i++) {
 		if (i < online)
 			set_cpu_online(hotplug->sequence[i], PASS_CPU_UP);
 		else
@@ -377,7 +377,7 @@ static struct pass_hotplug pass_hotplug_dummy = {
  *
  * @type: the type of PASS hotplug
  */
-struct pass_hotplug* pass_get_hotplug(struct pass_policy *policy,
+struct pass_hotplug *pass_get_hotplug(struct pass_policy *policy,
 					enum pass_gov_type type)
 {
 	switch (type) {
@@ -602,7 +602,7 @@ static void pass_governor_stop(struct pass_policy *policy)
 static Eina_Bool pass_governor_core_timer(void *data)
 {
 	struct pass_policy *policy = (struct pass_policy *)data;
-	static int count = 0;
+	static int count;
 	int level;
 	int online;
 	int ret;
@@ -719,7 +719,7 @@ static int pass_governor_init(struct pass_policy *policy)
 	int max_level;
 	int ret;
 
-	if(policy->governor->gov_timeout < 0) {
+	if (policy->governor->gov_timeout < 0) {
 		_E("invalid timeout value [%d]!",
 			policy->governor->gov_timeout);
 		pass_governor_stop(policy);
@@ -844,7 +844,7 @@ static struct pass_governor pass_gov_radiation = {
  *
  * @type: the type of PASS governor
  */
-struct pass_governor* pass_get_governor(struct pass_policy *policy,
+struct pass_governor *pass_get_governor(struct pass_policy *policy,
 						enum pass_gov_type type)
 {
 	switch (type) {

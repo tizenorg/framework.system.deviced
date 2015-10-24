@@ -16,16 +16,34 @@
  * limitations under the License.
  */
 
+#include <stdio.h>
+#include <errno.h>
+#include "core/log.h"
 #include "usb-common.h"
 
-int get_cradle_status(void)
+#define BUF_MAX 256
+
+int read_file(char *path, char *text, unsigned int len)
 {
-	int cradle;
+	FILE *fp;
+	int ret;
+	char buf[BUF_MAX];
 
-	/* If cradle == 0, cradle is not connected.
-	 * And if cradle > 0, cradle is connected. */
-	if (vconf_get_int(VCONFKEY_SYSMAN_CRADLE_STATUS, &cradle) != 0)
-		return 0;
+	if (!path || !text)
+		return -EINVAL;
 
-	return cradle;
+	fp = fopen(path, "r");
+	if (!fp) {
+		_E("Failed to open file (%s) errno(%d)", path, errno);
+		return -errno;
+	}
+
+	fscanf(fp, "%s", buf);
+	fclose(fp);
+
+	_I("buf(%s)", buf);
+
+	snprintf(text, len, "%s", buf);
+
+	return 0;
 }
