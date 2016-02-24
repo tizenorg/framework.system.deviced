@@ -79,7 +79,6 @@ struct block_data {
 	char *mount_point;
 	enum mount_state state;
 	bool primary;   /* the first partition */
-	int flags;
 };
 
 struct block_dev_ops {
@@ -105,81 +104,13 @@ static void __DESTRUCTOR__ block_dev_exit(void) \
 	remove_block_dev(dev); \
 }
 
-enum block_flags {
-	FLAG_NONE        = 0x0000,
-	UNMOUNT_UNSAFE   = 0x0001,
-	FS_BROKEN        = 0x0002,
-	FS_EMPTY         = 0x0004,
-	FS_NOT_SUPPORTED = 0x0008,
-	MOUNT_READONLY   = 0x0010,
-};
-
-/* a: struct block_data
- * b: enum block_flags  */
-#define BLOCK_FLAG_SET(a, b) \
-	do { \
-		if (a) { \
-			((a->flags) |= (b)); \
-		} \
-	} while (0)
-
-#define BLOCK_FLAG_UNSET(a, b) \
-	do { \
-		if (a) { \
-			((a->flags) &= ~(b)); \
-		} \
-	} while (0)
-
-#define BLOCK_IS_FLAG_SET(a, b) \
-	((a) ? (((a->flags) & (b)) ? true : false) : false)
-
-#define BLOCK_FLAG_CLEAR_ALL(a) \
-	do { \
-		if (a) { \
-			(a->flags) = FLAG_NONE; \
-		} \
-	} while (0)
-
-#define BLOCK_FLAG_MOUNT_CLEAR(a) \
-	do { \
-		BLOCK_FLAG_UNSET(a, FS_BROKEN); \
-		BLOCK_FLAG_UNSET(a, FS_EMPTY); \
-		BLOCK_FLAG_UNSET(a, FS_NOT_SUPPORTED); \
-		BLOCK_FLAG_UNSET(a, MOUNT_READONLY); \
-	} while (0)
-
-#define BLOCK_FLAG_UNMOUNT_CLEAR(a) \
-	do { \
-		BLOCK_FLAG_UNSET(a, UNMOUNT_UNSAFE); \
-	} while (0)
-
-#define BLOCK_GET_MOUNT_FLAGS(a, c) \
-	do { \
-		c = a->flags; \
-		c &= ~UNMOUNT_UNSAFE; \
-	} while (0)
-
-#define BLOCK_GET_UNMOUNT_FLAGS(a, c) \
-	do { \
-		c = 0; \
-		if (BLOCK_IS_FLAG_SET(a, UNMOUNT_UNSAFE)) \
-			c += UNMOUNT_UNSAFE; \
-	} while (0)
-
-#define BLOCK_GET_FORMAT_FLAGS(a, c) \
-	do { \
-		c = 0; \
-		if (BLOCK_IS_FLAG_SET(a, FS_NOT_SUPPORTED)) \
-			c += FS_NOT_SUPPORTED; \
-	} while (0)
-
 /* if mount_point is null, the user defined mount point removed */
-int change_mount_point_legacy(const char *devnode, const char *mount_point);
-int mount_block_device_legacy(const char *devnode);
-int unmount_block_device_legacy(const char *devnode,
+int change_mount_point(const char *devnode, const char *mount_point);
+int mount_block_device(const char *devnode);
+int unmount_block_device(const char *devnode,
 		enum unmount_operation option);
 /* if fs_type is null, it will use the exisiting fs type */
-int format_block_device_legacy(const char *devnode,
+int format_block_device(const char *devnode,
 		const char *fs_type,
 		enum unmount_operation option);
 

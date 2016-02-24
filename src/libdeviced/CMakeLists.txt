@@ -3,7 +3,6 @@ PROJECT(libdeviced C)
 
 SET(LIBDEVICED_SRCS
 	battery.c
-	block.c
 	control.c
 	display.c
 	dbus.c
@@ -24,8 +23,6 @@ pkg_check_modules(libpkgs REQUIRED
 	vconf
 	dlog
 	dbus-1
-	glib-2.0
-	gio-2.0
 	edbus)
 
 FOREACH(flag ${libpkgs_CFLAGS})

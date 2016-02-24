@@ -357,11 +357,10 @@ int mount_check(const char *path)
 void print_time(const char *prefix)
 {
 	struct timeval tv;
-	struct tm tm;
-
+	struct tm *tm;
 	gettimeofday(&tv, NULL);
-	if (!localtime_r(&(tv.tv_sec), &tm))
-		return;
-	_D("%s --> %d:%02d:%02d %d",
-			prefix, tm.tm_hour, tm.tm_min, tm.tm_sec, tv.tv_usec);
+	tm = localtime(&(tv.tv_sec));
+	if (tm)
+		_D("%s --> %d:%02d:%02d %d",
+				prefix, tm->tm_hour, tm->tm_min, tm->tm_sec, tv.tv_usec);
 }

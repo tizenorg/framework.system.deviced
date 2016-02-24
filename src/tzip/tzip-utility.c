@@ -164,14 +164,13 @@ int add_dir_info(struct tzip_mount_entry *entry, const char *parent_dir,
 			return -ENOMEM;
 		}
 
-		len = strlen(parent_dir) + 1;
-		dinfo->name = (char *)malloc(len);
+		dinfo->name = (char *)malloc(strlen(parent_dir)+1);
 		if (!dinfo->name) {
 			_E("Malloc failed");
 			free(dinfo);
 			return -ENOMEM;
 		}
-		snprintf(dinfo->name, len, "%s", parent_dir);
+		strcpy(dinfo->name, parent_dir);
 		g_hash_table_insert(entry->dir_hash, dinfo->name, dinfo);
 		fileinfo_to_stat(NULL, &dinfo->stat, S_IFDIR);
 	}
@@ -295,14 +294,13 @@ int add_mount_entry(const char *zip_path, const char *mount_path)
 	}
 	entry->dir_hash = NULL;
 
-	len = strlen(mount_path) + 1;
-	entry->path = (char *)malloc(len);
+	entry->path = (char *)malloc(strlen(mount_path)+1);
 	if (!entry->path) {
 		free(entry);
 		_E("Malloc failed");
 		return -ENOMEM;
 	}
-	snprintf(entry->path, len, "%s", mount_path);
+	strcpy(entry->path, mount_path);
 
 	len = strlen(zip_path) + 1;
 	entry->zip_path = (char *)malloc(len);

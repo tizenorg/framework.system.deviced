@@ -325,7 +325,6 @@ static int open_device(int device_index, int *device_handle)
 	struct ff_info *info;
 	int n;
 	bool found = false;
-	dd_list *elem;
 
 	if (!device_handle)
 		return -EINVAL;
@@ -357,8 +356,8 @@ static int open_device(int device_index, int *device_handle)
 
 	while (found != true) {
 		++unique_number;
-		elem = DD_LIST_FIND(handle_list, unique_number);
-		if (!elem)
+		DD_LIST_FIND(handle_list, unique_number);
+		if (handle_list == NULL)
 			found = true;
 	}
 

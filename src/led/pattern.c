@@ -119,8 +119,7 @@ static void *play_cb(void *arg)
 			led_set_brt(val);
 
 			/* Sleep time 50*999us = 49.950ms (Vibration unit 50ms) */
-			time.tv_nsec = SAMPLE_INTERVAL * 999 * 1000;
-			nanosleep(&time, NULL);
+			usleep(SAMPLE_INTERVAL*999);
 		}
 
 		/* reset index */

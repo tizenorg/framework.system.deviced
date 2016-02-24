@@ -128,14 +128,13 @@ static int tzip_open(const char *path, struct fuse_file_info *fi)
 		return -ENOENT;
 	}
 
-	len = strlen(entry->zip_path) + 1;
-	zippath = (char *)malloc(len);
+	zippath = (char *)malloc(strlen(entry->zip_path)+1);
 	if (!zippath) {
 		tzip_unlock();
 		_E("Malloc failed");
 		return -ENOMEM;
 	}
-	snprintf(zippath, len, "%s", entry->zip_path);
+	strcpy(zippath, entry->zip_path);
 
 	len = strlen(entry->path);
 	file_len = strlen(path) - len + 1;
