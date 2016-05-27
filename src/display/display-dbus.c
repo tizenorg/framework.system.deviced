@@ -1410,11 +1410,13 @@ static void sim_signal_handler(void *data, DBusMessage *msg)
 	if (val != SIM_CARD_NOT_PRESENT) {
 		state = true;
 		vconf_set_bool(VCONFKEY_LCD_BRIGHTNESS_INIT, state);
+#ifndef EMULATOR
 		vconf_set_int(VCONFKEY_SETAPPL_LCD_BRIGHTNESS,
 		    display_conf.default_brightness);
 		backlight_ops.set_default_brt(
 		    display_conf.default_brightness);
 		backlight_ops.update();
+#endif
 		_I("SIM card is inserted at first!");
 	}
 }

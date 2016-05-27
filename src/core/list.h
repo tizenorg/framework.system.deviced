@@ -62,7 +62,7 @@ typedef Eina_List dd_list;
 #define DD_LIST_FOREACH_SAFE(head, elem, elem_next, node) \
 	EINA_LIST_FOREACH_SAFE(head, elem, elem_next, node)
 #define DD_LIST_FIND(a, b)	\
-	a = eina_list_data_find_list(a, b)
+	eina_list_data_find_list(a, b)
 
 #else
 #include <glib.h>
@@ -121,7 +121,7 @@ out:
 			elem && ((node = elem->data) != NULL); \
 			elem = elem_next, elem_next = g_list_next(elem), node = NULL)
 #define DD_LIST_FIND(a, b)		\
-	a = g_list_find(a, (gpointer)b)
+	g_list_find(a, (gpointer)b)
 
 #endif
 

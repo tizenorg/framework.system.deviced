@@ -206,9 +206,9 @@ static void memcg_move_group(int pid, int oom_score_adj)
 
 	_SD("memcg_move_group : %s, pid = %d", exe_name, pid);
 	if (oom_score_adj >= OOMADJ_BACKGRD_LOCKED)
-		sprintf(buf, "/sys/fs/cgroup/memory/background/cgroup.procs");
+		snprintf(buf, sizeof(buf), "/sys/fs/cgroup/memory/background/cgroup.procs");
 	else if (oom_score_adj >= OOMADJ_FOREGRD_LOCKED && oom_score_adj < OOMADJ_BACKGRD_LOCKED)
-		sprintf(buf, "/sys/fs/cgroup/memory/foreground/cgroup.procs");
+		snprintf(buf, sizeof(buf), "/sys/fs/cgroup/memory/foreground/cgroup.procs");
 	else
 		return;
 

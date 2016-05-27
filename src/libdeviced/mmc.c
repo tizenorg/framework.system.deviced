@@ -25,16 +25,16 @@
 #include "dbus.h"
 #include "common.h"
 #include "dd-mmc.h"
+#include "dd-block.h"
 
 #define METHOD_REQUEST_SECURE_MOUNT		"RequestSecureMount"
 #define METHOD_REQUEST_SECURE_UNMOUNT	"RequestSecureUnmount"
-#define METHOD_REQUEST_MOUNT		"RequestMount"
-#define METHOD_REQUEST_UNMOUNT		"RequestUnmount"
-#define METHOD_REQUEST_FORMAT		"RequestFormat"
 
 #define ODE_MOUNT_STATE 1
 
 #define FORMAT_TIMEOUT	(120*1000)
+
+static block_device *mmc_dev;
 
 API int mmc_secure_mount(const char *mount_point)
 {
@@ -58,132 +58,130 @@ API int mmc_secure_unmount(const char *mount_point)
 			DEVICED_INTERFACE_MMC, METHOD_REQUEST_SECURE_UNMOUNT, "s", arr);
 }
 
-static void mount_mmc_cb(void *data, DBusMessage *msg, DBusError *err)
+static block_device *get_mmc_device(void)
+{
+	block_device *dev = NULL;
+	block_list *list = NULL;
+	int ret;
+
+	if (mmc_dev)
+		return mmc_dev;
+
+	ret = deviced_block_get_list(&list, BLOCK_MMC);
+	if (ret < 0) {
+		_E("Failed to get mmc list (%d)", ret);
+		return NULL;
+	}
+
+	if (!list) {
+		_E("There is no mmc");
+		return NULL;
+	}
+
+	BLOCK_LIST_FOREACH(list, dev) {
+		if (dev->primary)
+			break;
+	}
+
+	if (!dev) {
+		_E("There is no mmc which is primary device");
+		goto out;
+	}
+
+	mmc_dev = deviced_block_duplicate_device(dev);
+	if (!mmc_dev)
+		_E("Failed to copy mmc object");
+
+out:
+	if (list)
+		deviced_block_release_list(&list);
+
+	return mmc_dev;
+}
+
+static void release_mmc_device(void)
+{
+	deviced_block_release_device(&mmc_dev);
+}
+
+static int mmc_changed_cb(block_device *dev, enum block_state state, void *data)
+{
+	static block_device *bdev;
+	int ret;
+
+	if (state == BLOCK_ADDED)
+		return 0;
+
+	bdev = get_mmc_device();
+	if (!bdev)
+		return 0;
+
+	if (strncmp(bdev->devnode, dev->devnode, strlen(dev->devnode) + 1))
+		return 0;
+
+	if (state == BLOCK_CHANGED) {
+		ret = deviced_block_update_device(dev, bdev);
+		if (ret < 0)
+			_E("Failed to update mmc object(%d)", ret);
+		return ret;
+	}
+
+	if (state == BLOCK_REMOVED)
+		release_mmc_device();
+
+	return 0;
+}
+
+static int mmc_request_cb(block_device *dev, int result, void *data)
 {
 	struct mmc_contents *mmc_data = (struct mmc_contents *)data;
-	DBusError r_err;
-	int r, mmc_ret;
 
-	_D("mount_mmc_cb called");
+	if (mmc_data && mmc_data->mmc_cb)
+		mmc_data->mmc_cb(result, mmc_data->user_data);
 
-	if (!msg) {
-		_E("no message [%s:%s]", err->name, err->message);
-		mmc_ret = -EBADMSG;
-		goto exit;
-	}
-
-	dbus_error_init(&r_err);
-	r = dbus_message_get_args(msg, &r_err, DBUS_TYPE_INT32, &mmc_ret, DBUS_TYPE_INVALID);
-	if (!r) {
-		_E("no message [%s:%s]", r_err.name, r_err.message);
-		dbus_error_free(&r_err);
-		mmc_ret = -EBADMSG;
-		goto exit;
-	}
-
-	_I("Mount State : %d", mmc_ret);
-
-exit:
-	(mmc_data->mmc_cb)(mmc_ret, mmc_data->user_data);
+	return 0;
 }
 
 API int deviced_request_mount_mmc(struct mmc_contents *mmc_data)
 {
-	void (*mount_cb)(void*, DBusMessage*, DBusError*) = NULL;
-	void *data = NULL;
+	block_device *dev;
+	int ret;
 
-	if (mmc_data != NULL && mmc_data->mmc_cb != NULL) {
-		mount_cb = mount_mmc_cb;
-		data = mmc_data;
-	}
-
-	return dbus_method_async_with_reply(DEVICED_BUS_NAME,
-			DEVICED_PATH_MMC,
-			DEVICED_INTERFACE_MMC,
-			METHOD_REQUEST_MOUNT,
-			NULL, NULL, mount_cb, -1, data);
-}
-
-static void unmount_mmc_cb(void *data, DBusMessage *msg, DBusError *err)
-{
-	struct mmc_contents *mmc_data = (struct mmc_contents *)data;
-	DBusError r_err;
-	int r, mmc_ret;
-
-	_D("unmount_mmc_cb called");
-
-	if (!msg) {
-		_E("no message [%s:%s]", err->name, err->message);
-		mmc_ret = -EBADMSG;
-		goto exit;
-	}
-
-	dbus_error_init(&r_err);
-	r = dbus_message_get_args(msg, &r_err, DBUS_TYPE_INT32, &mmc_ret, DBUS_TYPE_INVALID);
-	if (!r) {
-		_E("no message [%s:%s]", r_err.name, r_err.message);
-		dbus_error_free(&r_err);
-		mmc_ret = -EBADMSG;
-		goto exit;
-	}
-
-	_I("Unmount State : %d", mmc_ret);
-
-exit:
-	(mmc_data->mmc_cb)(mmc_ret, mmc_data->user_data);
-}
-
-API int deviced_request_unmount_mmc(struct mmc_contents *mmc_data, int option)
-{
-	char *arr[1];
-	char buf_opt[32];
-	void (*unmount_cb)(void*, DBusMessage*, DBusError*) = NULL;
-	void *data = NULL;
-
-	if (option < 0 || option > 1)
+	if (!mmc_data)
 		return -EINVAL;
 
-	if (mmc_data != NULL && mmc_data->mmc_cb != NULL) {
-		unmount_cb = unmount_mmc_cb;
-		data = mmc_data;
+	ret = deviced_block_register_device_change(BLOCK_MMC, mmc_changed_cb, NULL);
+	if (ret == 0)
+		_I("mmc changed callback is registered");
+
+	dev = get_mmc_device();
+	if (!dev) {
+		_E("There is no mmc");
+		return -ENOENT;
 	}
 
-	snprintf(buf_opt, sizeof(buf_opt), "%d", option);
-	arr[0] = buf_opt;
-	return dbus_method_async_with_reply(DEVICED_BUS_NAME,
-			DEVICED_PATH_MMC,
-			DEVICED_INTERFACE_MMC,
-			METHOD_REQUEST_UNMOUNT,
-			"i", arr, unmount_cb, -1, data);
+	return deviced_block_mount(dev, mmc_request_cb, mmc_data);
 }
 
-static void format_mmc_cb(void *data, DBusMessage *msg, DBusError *err)
+API int deviced_request_unmount_mmc(struct mmc_contents *mmc_data, int option/* deprecated */)
 {
-	struct mmc_contents *mmc_data = (struct mmc_contents *)data;
-	DBusError r_err;
-	int r, mmc_ret;
+	block_device *dev;
+	int ret;
 
-	_D("format_mmc_cb called");
+	if (!mmc_data)
+		return -EINVAL;
 
-	if (!msg) {
-		_E("no message [%s:%s]", err->name, err->message);
-		mmc_ret = -EBADMSG;
-		goto exit;
+	ret = deviced_block_register_device_change(BLOCK_MMC, mmc_changed_cb, NULL);
+	if (ret == 0)
+		_I("mmc changed callback is registered");
+
+	dev = get_mmc_device();
+	if (!dev) {
+		_E("There is no mmc");
+		return -ENOENT;
 	}
 
-	dbus_error_init(&r_err);
-	r = dbus_message_get_args(msg, &r_err, DBUS_TYPE_INT32, &mmc_ret, DBUS_TYPE_INVALID);
-	if (!r) {
-		_E("no message [%s:%s]", r_err.name, r_err.message);
-		dbus_error_free(&r_err);
-		mmc_ret = -EBADMSG;
-		goto exit;
-	}
-
-	_I("Format State : %d", mmc_ret);
-
-exit:
-	(mmc_data->mmc_cb)(mmc_ret, mmc_data->user_data);
+	return deviced_block_unmount(dev, mmc_request_cb, mmc_data);
 }
 
 API int deviced_request_format_mmc(struct mmc_contents *mmc_data)
@@ -191,26 +189,23 @@ API int deviced_request_format_mmc(struct mmc_contents *mmc_data)
 	return deviced_format_mmc(mmc_data, 1);
 }
 
-API int deviced_format_mmc(struct mmc_contents *mmc_data, int option)
+API int deviced_format_mmc(struct mmc_contents *mmc_data, int option /* deprecated */)
 {
-	char *arr[1];
-	char buf_opt[32];
-	void (*format_cb)(void*, DBusMessage*, DBusError*) = NULL;
-	void *data = NULL;
+	block_device *dev;
+	int ret;
 
-	if (option < 0 || option > 1)
+	if (!mmc_data)
 		return -EINVAL;
 
-	if (mmc_data != NULL && mmc_data->mmc_cb != NULL) {
-		format_cb = format_mmc_cb;
-		data = mmc_data;
+	ret = deviced_block_register_device_change(BLOCK_MMC, mmc_changed_cb, NULL);
+	if (ret == 0)
+		_I("mmc changed callback is registered");
+
+	dev = get_mmc_device();
+	if (!dev) {
+		_E("There is no mmc");
+		return -ENOENT;
 	}
 
-	snprintf(buf_opt, sizeof(buf_opt), "%d", option);
-	arr[0] = buf_opt;
-	return dbus_method_async_with_reply(DEVICED_BUS_NAME,
-			DEVICED_PATH_MMC,
-			DEVICED_INTERFACE_MMC,
-			METHOD_REQUEST_FORMAT,
-			"i", arr, format_cb, FORMAT_TIMEOUT, data);
+	return deviced_block_format(dev, mmc_request_cb, mmc_data);
 }

@@ -282,9 +282,6 @@ static void mmc_remove(struct block_data *data)
 {
 	assert(data);
 
-	if (!mmc_curpath)
-		return;
-
 	/* Mobile specific:
 	 * The primary partition is only valid. */
 	if (!data->primary)
@@ -325,13 +322,13 @@ static DBusMessage *edbus_request_secure_mount(E_DBus_Object *obj, DBusMessage *
 	}
 
 	_I("mount path : %s", path);
-	ret = change_mount_point(mmc_curpath, path);
+	ret = change_mount_point_legacy(mmc_curpath, path);
 	if (ret < 0) {
 		_E("fail to change mount point");
 		goto error;
 	}
 
-	ret = mount_block_device(mmc_curpath);
+	ret = mount_block_device_legacy(mmc_curpath);
 
 error:
 	reply = dbus_message_new_method_return(msg);
@@ -355,7 +352,7 @@ static DBusMessage *edbus_request_secure_unmount(E_DBus_Object *obj, DBusMessage
 	}
 
 	_I("unmount path : %s", path);
-	ret = unmount_block_device(mmc_curpath, UNMOUNT_NORMAL);
+	ret = unmount_block_device_legacy(mmc_curpath, UNMOUNT_NORMAL);
 
 error:
 	reply = dbus_message_new_method_return(msg);
@@ -380,7 +377,7 @@ static DBusMessage *edbus_request_mount(E_DBus_Object *obj, DBusMessage *msg)
 		goto error;
 	}
 
-	ret = mount_block_device(mmc_curpath);
+	ret = mount_block_device_legacy(mmc_curpath);
 
 error:
 	reply = dbus_message_new_method_return(msg);
@@ -413,7 +410,7 @@ static DBusMessage *edbus_request_unmount(E_DBus_Object *obj, DBusMessage *msg)
 		goto error;
 	}
 
-	ret = unmount_block_device(mmc_curpath, opt);
+	ret = unmount_block_device_legacy(mmc_curpath, opt);
 
 error:
 	reply = dbus_message_new_method_return(msg);
@@ -447,7 +444,7 @@ static DBusMessage *edbus_request_format(E_DBus_Object *obj, DBusMessage *msg)
 	}
 
 
-	ret = format_block_device(mmc_curpath, NULL, opt);
+	ret = format_block_device_legacy(mmc_curpath, NULL, opt);
 
 error:
 	reply = dbus_message_new_method_return(msg);

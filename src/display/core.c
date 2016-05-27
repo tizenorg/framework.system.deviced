@@ -792,6 +792,7 @@ static void update_display_time(void)
 		return;
 	}
 
+#ifndef EMULATOR
 	/* third priority : lock state */
 	if ((get_lock_screen_state() == VCONFKEY_IDLE_LOCK) &&
 	    !get_lock_screen_bg_state()) {
@@ -808,6 +809,7 @@ static void update_display_time(void)
 		}
 		return;
 	}
+#endif
 
 	/* default setting */
 	ret = get_run_timeout(&run_timeout);
@@ -1022,10 +1024,12 @@ static int proc_condition(PMMsg *data)
 		if (data->timeout == 0 && data->timeout2 == 0) {
 			_I("LCD timeout changed : default setting");
 			get_lcd_timeout_from_settings();
+#ifndef EMULATOR
 			if (get_lock_screen_state() == VCONFKEY_IDLE_LOCK) {
 				_I("LOCK state : setting lock timeout!");
 				states[S_NORMAL].timeout = lock_screen_timeout;
 			}
+#endif
 			custom_normal_timeout = custom_dim_timeout = 0;
 			if (!(val_timeout & CUSTOM_HOLDKEY_BIT))
 				custom_change_pid = -1;
@@ -1939,11 +1943,13 @@ static void check_seed_status(void)
 	/* lock screen check */
 	ret = vconf_get_int(VCONFKEY_IDLE_LOCK_STATE, &lock_state);
 	set_lock_screen_state(lock_state);
+#ifndef EMULATOR
 	if (lock_state == VCONFKEY_IDLE_LOCK) {
 		states[S_NORMAL].timeout = lock_screen_timeout;
 		_I("LCD NORMAL timeout is set by %d ms for lock screen",
 		    lock_screen_timeout);
 	}
+#endif
 
 	return;
 }

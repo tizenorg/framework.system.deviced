@@ -30,6 +30,9 @@
                     <method name="lockstate">
                         <annotation name="com.tizen.smack" value="deviced::display" />
                     </method>
+                    <method name="unlockstate">
+                        <annotation name="com.tizen.smack" value="deviced::display" />
+                    </method>
                     <method name="changestate">
                         <annotation name="com.tizen.smack" value="deviced::display" />
                     </method>
